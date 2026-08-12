@@ -32,6 +32,63 @@ cd "$DIR"
 
 PUERTO_TCP="${TCP_PORT:-5023}"
 
+# ── 6. reglas de VPC — capa (b) ──────────────────────────────────────────────
+#
+# Este recordatorio es lo más importante que imprime el script, así que se monta
+# en una trampa de salida: si el despliegue muere antes de llegar aquí, el aviso
+# se imprime igual y no te quedas sin saber que falta abrir el firewall de VPC.
+VPC_IMPRESO=0
+
+recordatorio_vpc() {
+  if [[ $VPC_IMPRESO -eq 1 ]]; then
+    return 0
+  fi
+  VPC_IMPRESO=1
+
+  local ip
+  ip="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || echo '<IP-DEL-VPS>')"
+
+  echo
+  echo -e "${AMBAR}${NEGRITA}══════════════════════════════════════════════════════════════════════════${RESET}"
+  echo -e "${AMBAR}${NEGRITA}  6/6 · FALTA LA SEGUNDA CAPA DE CORTAFUEGOS (reglas de VPC en GCP)${RESET}"
+  echo -e "${AMBAR}${NEGRITA}══════════════════════════════════════════════════════════════════════════${RESET}"
+  echo
+  echo -e "  ufw ya está abierto DENTRO de la VM, pero Google Cloud filtra el tráfico"
+  echo -e "  ${NEGRITA}antes${RESET} de que llegue a la máquina. Sin estas reglas el puerto ${PUERTO_TCP} sigue"
+  echo -e "  bloqueado y el rastreador nunca va a conectar."
+  echo
+  echo -e "  ${NEGRITA}Ejecuta esto desde tu Mac (o en Cloud Shell), NO dentro de la VM:${RESET}"
+  echo
+  echo -e "${AZUL}  gcloud compute firewall-rules create allow-gps-tcp \\"
+  echo -e "    --allow tcp:${PUERTO_TCP} --source-ranges 0.0.0.0/0 --description \"Ingesta GPS GT06\""
+  echo
+  echo -e "  gcloud compute firewall-rules create allow-http-https \\"
+  echo -e "    --allow tcp:80,tcp:443 --source-ranges 0.0.0.0/0${RESET}"
+  echo
+  echo -e "  Para comprobar que quedaron:"
+  echo -e "${AZUL}  gcloud compute firewall-rules list${RESET}"
+  echo
+  echo -e "${AMBAR}══════════════════════════════════════════════════════════════════════════${RESET}"
+  echo
+  echo -e "  IP pública de esta máquina:  ${NEGRITA}${ip}${RESET}"
+  echo
+  echo -e "  Siguientes pasos:"
+  echo -e "   1. Crea las reglas de VPC de arriba."
+  echo -e "   2. En Cloudflare:"
+  echo -e "        ${NEGRITA}gps.atlyx.online${RESET}   A → ${ip}  ${AMBAR}NUBE GRIS (proxy DESACTIVADO)${RESET}"
+  echo -e "        ${NEGRITA}view.atlyx.online${RESET}  A → ${ip}  ${AMBAR}NUBE NARANJA (proxy ACTIVADO)${RESET}"
+  echo -e "   3. Genera la contraseña del panel:"
+  echo -e "        ${AZUL}docker compose run --rm app node scripts/hash-password.js 'tu-password'${RESET}"
+  echo -e "      pégala en .env como AUTH_PASSWORD_HASH, quita AUTH_PASSWORD y recarga:"
+  echo -e "        ${AZUL}docker compose up -d${RESET}"
+  echo -e "   4. Apunta el rastreador por SMS:"
+  echo -e "        ${AZUL}SERVER,1,gps.atlyx.online,${PUERTO_TCP},0#${RESET}"
+  echo -e "   5. Verifica todo:  ${AZUL}docker compose exec app node scripts/doctor.js${RESET}"
+  echo
+  echo -e "  Registros en vivo:  ${AZUL}docker compose logs -f app${RESET}"
+  echo
+}
+
 # ── 0. comprobaciones previas ────────────────────────────────────────────────
 if [[ "$(uname -s)" != "Linux" ]]; then
   error "Este script es para Ubuntu. En macOS solo necesitas: docker compose up -d"
@@ -42,6 +99,10 @@ if [[ $EUID -ne 0 ]]; then
   error "Ejecútalo con sudo:  sudo ./deploy.sh"
   exit 1
 fi
+
+# A partir de aquí el despliegue va en serio: si algo se cae, el recordatorio
+# del firewall de VPC se imprime igual gracias a esta trampa.
+trap recordatorio_vpc EXIT
 
 USUARIO_REAL="${SUDO_USER:-root}"
 
@@ -151,53 +212,48 @@ fi
 # ── 5. respaldos ─────────────────────────────────────────────────────────────
 info "5/6 · Respaldo diario"
 
-chmod +x scripts/backup.sh
-CRON_LINEA="0 3 * * * cd ${DIR} && ./scripts/backup.sh >> ${DIR}/backups/backup.log 2>&1"
+# Este paso NO debe tumbar el despliegue: si falla, el servicio ya está arriba y
+# lo único que se pierde es el respaldo automático. Por eso va dentro de una
+# función que se llama con "|| true" y nunca propaga el error.
+configurar_respaldo() {
+  chmod +x scripts/backup.sh
 
-if crontab -l 2>/dev/null | grep -Fq "${DIR}/scripts/backup.sh"; then
-  ok "El cron de respaldo ya estaba configurado"
-else
-  (crontab -l 2>/dev/null || true; echo "$CRON_LINEA") | crontab -
-  ok "Respaldo diario a las 03:00, con rotación a 7 días (backups/)"
-fi
+  # Las imágenes mínimas de Ubuntu (las de GCP entre ellas) vienen SIN el
+  # paquete cron, así que el binario `crontab` puede no existir. Instalamos el
+  # demonio y usamos un archivo en /etc/cron.d en lugar de `crontab -`:
+  # no necesita el binario, es idempotente y se ve de un vistazo.
+  if ! dpkg -s cron >/dev/null 2>&1; then
+    info "Instalando el demonio cron (no venía en la imagen)…"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cron >/dev/null 2>&1 || {
+      warn "No se pudo instalar cron. El respaldo automático queda pendiente."
+      warn "Ejecútalo a mano cuando quieras:  cd ${DIR} && ./scripts/backup.sh"
+      return 0
+    }
+  fi
 
-# ── 6. reglas de VPC — capa (b) ──────────────────────────────────────────────
-IP_PUBLICA="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || echo '<IP-DEL-VPS>')"
+  systemctl enable --now cron >/dev/null 2>&1 || true
 
-echo
-echo -e "${AMBAR}${NEGRITA}══════════════════════════════════════════════════════════════════════════${RESET}"
-echo -e "${AMBAR}${NEGRITA}  6/6 · FALTA LA SEGUNDA CAPA DE CORTAFUEGOS (reglas de VPC en GCP)${RESET}"
-echo -e "${AMBAR}${NEGRITA}══════════════════════════════════════════════════════════════════════════${RESET}"
-echo
-echo -e "  ufw ya está abierto DENTRO de la VM, pero Google Cloud filtra el tráfico"
-echo -e "  ${NEGRITA}antes${RESET} de que llegue a la máquina. Sin estas reglas el puerto ${PUERTO_TCP} sigue"
-echo -e "  bloqueado y el rastreador nunca va a conectar."
-echo
-echo -e "  ${NEGRITA}Ejecuta esto desde tu Mac (o en Cloud Shell), NO dentro de la VM:${RESET}"
-echo
-echo -e "${AZUL}  gcloud compute firewall-rules create allow-gps-tcp \\"
-echo -e "    --allow tcp:${PUERTO_TCP} --source-ranges 0.0.0.0/0 --description \"Ingesta GPS GT06\""
-echo
-echo -e "  gcloud compute firewall-rules create allow-http-https \\"
-echo -e "    --allow tcp:80,tcp:443 --source-ranges 0.0.0.0/0${RESET}"
-echo
-echo -e "  Para comprobar que quedaron:"
-echo -e "${AZUL}  gcloud compute firewall-rules list${RESET}"
-echo
-echo -e "${AMBAR}══════════════════════════════════════════════════════════════════════════${RESET}"
-echo
-echo -e "${VERDE}${NEGRITA}Listo.${RESET}"
-echo
-echo -e "  IP pública de esta máquina:  ${NEGRITA}${IP_PUBLICA}${RESET}"
-echo
-echo -e "  Siguientes pasos:"
-echo -e "   1. Crea las reglas de VPC de arriba."
-echo -e "   2. En Cloudflare:"
-echo -e "        ${NEGRITA}gps.atlyx.online${RESET}   A → ${IP_PUBLICA}  ${AMBAR}NUBE GRIS (proxy DESACTIVADO)${RESET}"
-echo -e "        ${NEGRITA}view.atlyx.online${RESET}  A → ${IP_PUBLICA}  ${AMBAR}NUBE NARANJA (proxy ACTIVADO)${RESET}"
-echo -e "   3. Apunta el rastreador por SMS:"
-echo -e "        ${AZUL}SERVER,1,gps.atlyx.online,${PUERTO_TCP},0#${RESET}"
-echo -e "   4. Verifica todo:  ${AZUL}docker compose exec app node scripts/doctor.js${RESET}"
-echo
-echo -e "  Registros en vivo:  ${AZUL}docker compose logs -f app${RESET}"
+  # Un archivo en /etc/cron.d lleva un campo extra: el usuario que lo ejecuta.
+  # El nombre NO puede llevar puntos o cron lo ignora en silencio.
+  cat > /etc/cron.d/atlyx-gps-backup <<EOF
+# Respaldo diario de atlyx-gps. Lo instaló deploy.sh; puedes editarlo o borrarlo.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+0 3 * * * root cd ${DIR} && ./scripts/backup.sh >> ${DIR}/backups/backup.log 2>&1
+EOF
+  chmod 0644 /etc/cron.d/atlyx-gps-backup
+
+  if systemctl is-active --quiet cron 2>/dev/null; then
+    ok "Respaldo diario a las 03:00 con rotación a 7 días (/etc/cron.d/atlyx-gps-backup)"
+  else
+    warn "El archivo de cron quedó escrito, pero el demonio cron no está activo."
+    warn "Actívalo con:  sudo systemctl enable --now cron"
+  fi
+}
+
+configurar_respaldo || warn "El paso de respaldos falló, pero el servicio sigue arriba."
+
+
+recordatorio_vpc
+echo -e "${VERDE}${NEGRITA}Despliegue terminado.${RESET}"
 echo
