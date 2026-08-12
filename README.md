@@ -186,6 +186,8 @@ El canal remoto `0x80`, su cola y la lista permitida están en
 | GET | `/api/session` | No | Indica si la petición tiene una sesión válida y, en ese caso, devuelve el usuario. |
 | GET | `/api/config` | Sí | Devuelve zona horaria, umbrales de estado, dominios configurados y puerto TCP para el frontend. |
 | GET | `/api/devices` | Sí | Lista todos los equipos con su última posición conocida, ordenados por alias e IMEI. |
+| POST | `/api/devices` | Sí | Agrega o restaura un equipo con `imei` de 15 dígitos y `alias`/`placa` opcionales. |
+| DELETE | `/api/devices/:imei` | Sí | Archiva y oculta el equipo sin borrar su historial. |
 | GET | `/api/devices/:imei/last` | Sí | Busca el equipo por IMEI y devuelve el equipo y su última posición; responde `404` si no existe. |
 | GET | `/api/devices/:imei/positions` | Sí | Devuelve el histórico del equipo. Admite `desde` y `hasta` en ISO 8601, `limit` —100 por defecto y máximo 5000— y `solo_validas=1`; responde en orden cronológico ascendente. |
 | GET | `/api/devices/:imei/debug` | Sí | Devuelve las últimas tramas decodificadas conservadas en memoria para ese IMEI. |
@@ -214,10 +216,16 @@ El WebSocket `/ws` no forma parte de `routes.js`: está definido en `src/web/ws.
 | `alias` | `TEXT` |
 | `placa` | `TEXT` |
 | `activo` | `BOOLEAN NOT NULL DEFAULT false` |
+| `archived_at` | `TIMESTAMPTZ`; nulo mientras el equipo pertenece a la flotilla |
 | `last_seen_at` | `TIMESTAMPTZ` |
 | `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` |
 
 Los IMEI desconocidos se autorregistran con `activo=false`. La migración `002_device_seed.sql` inserta `351840620204473`, alias `Moto 1`, placa nula y `activo=true`, sin sobrescribirlo si ya existe.
+
+Desde el panel web se pueden agregar equipos indicando un IMEI de 15 dígitos,
+alias y placa opcionales. “Quitar equipo” realiza una baja reversible: asigna
+`archived_at`, lo oculta de la flotilla y conserva posiciones, eventos y
+comandos. Agregar nuevamente el mismo IMEI lo restaura con su historial.
 
 ### `positions`
 

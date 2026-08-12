@@ -78,20 +78,24 @@ export function attachWebSocket(server) {
     difundir({
       tipo: 'posicion',
       imei: device.imei,
-      device: { id: device.id, imei: device.imei, alias: device.alias, placa: device.placa, activo: device.activo },
+      device: { id: device.id, imei: device.imei, alias: device.alias, placa: device.placa,
+        activo: device.activo, archived_at: device.archived_at },
       position,
     });
   });
 
   bus.on('telemetry', ({ device, telemetry, updatedAt }) => {
+    if (device.archived_at) return;
     difundir({ tipo: 'telemetria', imei: device.imei, telemetry, telemetry_updated_at: updatedAt });
   });
 
   bus.on('alert', ({ device, tipo, position, data }) => {
+    if (device.archived_at) return;
     difundir({ tipo: 'alerta', imei: device.imei, alerta: tipo, position, data });
   });
 
   bus.on('command', ({ device, command }) => {
+    if (device.archived_at) return;
     difundir({ tipo: 'comando', imei: device.imei, command });
   });
 

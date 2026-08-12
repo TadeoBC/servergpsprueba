@@ -103,7 +103,11 @@ export async function resolveDeviceByTerminalId(terminalId) {
 }
 
 export async function touchDevice(deviceId) {
-  await query('UPDATE devices SET last_seen_at = now() WHERE id = $1', [deviceId]);
+  const { rows } = await query(
+    'UPDATE devices SET last_seen_at = now() WHERE id = $1 RETURNING *',
+    [deviceId],
+  );
+  return rows[0] ?? null;
 }
 
 export async function updateDeviceTelemetry(deviceId, patch) {
@@ -123,6 +127,39 @@ export async function updateDeviceSettings(deviceId, { speedLimitKmh, reportInte
     `UPDATE devices SET speed_limit_kmh = $2, report_interval_seconds = $3
      WHERE id = $1 RETURNING *`,
     [deviceId, speedLimitKmh, reportIntervalSeconds],
+  );
+  clearDeviceCache();
+  return rows[0] ?? null;
+}
+
+/**
+ * Da de alta un IMEI o restaura uno archivado. El ON CONFLICT conserva sus
+ * posiciones y eventos anteriores, en vez de crear una identidad duplicada.
+ */
+export async function createOrRestoreDevice({ imei, alias = null, placa = null }) {
+  const { rows } = await query(
+    `INSERT INTO devices (imei, alias, placa, activo, archived_at)
+     VALUES ($1, $2, $3, true, NULL)
+     ON CONFLICT (imei) DO UPDATE SET
+       alias = COALESCE(EXCLUDED.alias, devices.alias),
+       placa = COALESCE(EXCLUDED.placa, devices.placa),
+       activo = true,
+       archived_at = NULL
+     RETURNING *`,
+    [imei, alias, placa],
+  );
+  clearDeviceCache();
+  return rows[0];
+}
+
+/** Oculta el equipo sin destruir posiciones, eventos ni comandos. */
+export async function archiveDevice(deviceId) {
+  const { rows } = await query(
+    `UPDATE devices
+     SET activo = false, archived_at = now()
+     WHERE id = $1 AND archived_at IS NULL
+     RETURNING *`,
+    [deviceId],
   );
   clearDeviceCache();
   return rows[0] ?? null;
@@ -207,7 +244,7 @@ export async function insertEvent({ deviceId = null, tipo, positionId = null, ra
 /** Lista de equipos con su última posición conocida (con o sin fix). */
 export async function listDevicesWithLastPosition() {
   const { rows } = await query(`
-    SELECT d.id, d.imei, d.alias, d.placa, d.activo, d.last_seen_at, d.created_at,
+    SELECT d.id, d.imei, d.alias, d.placa, d.activo, d.archived_at, d.last_seen_at, d.created_at,
            d.speed_limit_kmh, d.report_interval_seconds, d.telemetry, d.telemetry_updated_at,
            p.id           AS position_id,
            ST_Y(p.geom::geometry) AS latitude,
@@ -221,6 +258,7 @@ export async function listDevicesWithLastPosition() {
       ORDER BY server_time DESC, id DESC
       LIMIT 1
     ) p ON true
+    WHERE d.archived_at IS NULL
     ORDER BY d.alias NULLS LAST, d.imei
   `);
   return rows.map(shapeDeviceRow);
@@ -353,6 +391,7 @@ function shapeDeviceRow(r) {
     alias: r.alias,
     placa: r.placa,
     activo: r.activo,
+    archived_at: r.archived_at,
     speed_limit_kmh: r.speed_limit_kmh,
     report_interval_seconds: r.report_interval_seconds,
     telemetry: r.telemetry ?? {},

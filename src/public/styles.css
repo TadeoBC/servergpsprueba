@@ -87,6 +87,8 @@ button, input, select { font: inherit; color: inherit; }
 .btn.primario { background: var(--acento); border-color: var(--acento); color: #06121f; font-weight: 600; }
 .btn.primario:hover { background: #58b4ff; }
 .btn.pequeno { padding: 4px 8px; font-size: 12px; }
+.btn.peligro { color: var(--rojo); border-color: rgba(231, 76, 60, .55); }
+.btn.peligro:hover { background: rgba(231, 76, 60, .12); border-color: var(--rojo); }
 
 /* ── lista de equipos ──────────────────────────────────────────────────────── */
 .seccion { border-bottom: 1px solid var(--borde); }
@@ -129,6 +131,15 @@ button, input, select { font: inherit; color: inherit; }
   border-radius: 4px;
   padding: 0 4px;
   margin-left: 6px;
+}
+
+.administrar-equipos { border-top: 1px dashed var(--borde); }
+.administrar-equipos > summary {
+  padding: 10px 14px;
+  cursor: pointer;
+  color: var(--acento);
+  font-size: 12px;
+  user-select: none;
 }
 
 /* ── detalle ───────────────────────────────────────────────────────────────── */

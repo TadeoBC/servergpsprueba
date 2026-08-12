@@ -25,6 +25,16 @@
       <section class="seccion">
         <h2>Equipos (<span id="conteo">0</span>)</h2>
         <div id="lista"><div class="vacio">Cargando…</div></div>
+        <details class="administrar-equipos">
+          <summary>Agregar equipo por IMEI</summary>
+          <form class="controles" id="form-equipo">
+            <div><label for="nuevo-imei">IMEI (15 dígitos)</label><input id="nuevo-imei" inputmode="numeric" pattern="[0-9]{15}" minlength="15" maxlength="15" required placeholder="351840620204473" /></div>
+            <div><label for="nuevo-alias">Alias</label><input id="nuevo-alias" maxlength="100" placeholder="Moto 2" /></div>
+            <div><label for="nueva-placa">Placa</label><input id="nueva-placa" maxlength="30" placeholder="ABC-123" /></div>
+            <button class="btn primario" type="submit">Agregar equipo</button>
+            <div id="info-equipo" class="vacio" style="padding:0"></div>
+          </form>
+        </details>
       </section>
 
       <section class="seccion" id="seccion-detalle" hidden>
@@ -35,6 +45,7 @@
           <div><label for="intervalo-reporte">Intervalo deseado (segundos)</label><input type="number" id="intervalo-reporte" min="10" max="86400" placeholder="Sin configurar" /></div>
           <button class="btn" id="guardar-ajustes" type="button">Guardar ajustes</button>
           <button class="btn primario" id="aplicar-intervalo" type="button">Aplicar intervalo al GPS</button>
+          <button class="btn peligro" id="quitar-equipo" type="button">Quitar equipo de la flotilla</button>
           <div id="info-ajustes" class="vacio" style="padding:0"></div>
         </div>
         <div class="controles comandos">

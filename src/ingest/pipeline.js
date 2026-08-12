@@ -54,9 +54,17 @@ export async function processDecoded(decoded, session) {
     return { device: null, positions: [] };
   }
 
-  await touchDevice(device.id).catch((err) =>
-    logger.error({ err: err.message, imei: device.imei }, 'no se pudo actualizar last_seen_at'),
-  );
+  const refreshedDevice = await touchDevice(device.id).catch((err) => {
+    logger.error({ err: err.message, imei: device.imei }, 'no se pudo actualizar last_seen_at');
+    return null;
+  });
+  // Además de la hora, esto refresca activo/archived_at para conexiones GT06
+  // largas. Así un equipo recién archivado no reaparece en la interfaz al
+  // mandar su siguiente posición, aunque conserve abierta la misma sesión TCP.
+  if (refreshedDevice) {
+    device = refreshedDevice;
+    session.device = refreshedDevice;
+  }
 
   const telemetryPatch = extractTelemetry(decoded);
   if (Object.keys(telemetryPatch).length) {

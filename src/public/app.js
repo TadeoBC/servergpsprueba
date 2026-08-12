@@ -488,6 +488,16 @@ function conectarWs() {
     }
 
     if (m.tipo === 'posicion') {
+      if (m.device?.archived_at) {
+        const marker = estado.marcadores.get(m.imei);
+        if (marker) mapa.removeLayer(marker);
+        estado.marcadores.delete(m.imei);
+        estado.equipos.delete(m.imei);
+        if (estado.seleccionado === m.imei) estado.seleccionado = null;
+        renderLista();
+        renderDetalle();
+        return;
+      }
       const previo = estado.equipos.get(m.imei) ?? m.device;
       // Un paquete sin fix no debe borrar la última coordenada confiable.
       const usable = m.position?.valid && m.position.latitude !== null && m.position.longitude !== null;
@@ -627,6 +637,8 @@ async function iniciar() {
   });
 
   document.getElementById('guardar-ajustes').addEventListener('click', guardarAjustes);
+  document.getElementById('quitar-equipo').addEventListener('click', quitarEquipo);
+  document.getElementById('form-equipo').addEventListener('submit', agregarEquipo);
   document.getElementById('aplicar-intervalo').addEventListener('click', () => enviarComando('set_interval', { seconds: Number(document.getElementById('intervalo-reporte').value) }));
   document.getElementById('consultar-estado').addEventListener('click', () => enviarComando('query_status'));
   document.getElementById('consultar-parametros').addEventListener('click', () => enviarComando('query_parameters'));
@@ -644,6 +656,60 @@ async function iniciar() {
 }
 
 iniciar();
+
+async function agregarEquipo(e) {
+  e.preventDefault();
+  const info = document.getElementById('info-equipo');
+  const imei = document.getElementById('nuevo-imei').value.trim();
+  if (!/^\d{15}$/.test(imei)) {
+    info.textContent = 'El IMEI debe tener exactamente 15 dígitos.';
+    return;
+  }
+  info.textContent = 'Agregando…';
+  try {
+    const data = await api('/api/devices', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        imei,
+        alias: document.getElementById('nuevo-alias').value.trim() || null,
+        placa: document.getElementById('nueva-placa').value.trim() || null,
+      }),
+    });
+    e.currentTarget.reset();
+    await cargarEquipos();
+    info.textContent = data.message;
+    await seleccionar(imei, true);
+  } catch (err) {
+    info.textContent = 'Error: ' + err.message;
+  }
+}
+
+async function quitarEquipo() {
+  const imei = estado.seleccionado;
+  const d = estado.equipos.get(imei);
+  if (!d) return;
+  const confirmado = window.confirm(
+    `¿Quitar ${nombre(d)} (${imei}) de la flotilla?\n\nEl historial NO se borrará y podrás restaurarlo agregando el mismo IMEI.`,
+  );
+  if (!confirmado) return;
+  const info = document.getElementById('info-ajustes');
+  try {
+    const data = await api(`/api/devices/${encodeURIComponent(imei)}`, { method: 'DELETE' });
+    const marker = estado.marcadores.get(imei);
+    if (marker) mapa.removeLayer(marker);
+    estado.marcadores.delete(imei);
+    estado.equipos.delete(imei);
+    estado.seleccionado = null;
+    limpiarRecorrido();
+    renderLista();
+    renderDetalle();
+    renderDepuracion();
+    document.getElementById('info-equipo').textContent = data.message;
+  } catch (err) {
+    info.textContent = 'Error: ' + err.message;
+  }
+}
 
 async function guardarAjustes() {
   const imei = estado.seleccionado;

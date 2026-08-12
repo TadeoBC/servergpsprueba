@@ -10,6 +10,8 @@ import {
   listEvents,
   updateDeviceSettings,
   listDeviceCommands,
+  createOrRestoreDevice,
+  archiveDevice,
 } from '../db/repo.js';
 import { createApiKey, listApiKeys, revokeApiKey } from './api-keys.js';
 import { buildAllowedCommand, COMMAND_CATALOG, CommandValidationError } from '../commands/catalog.js';
@@ -101,6 +103,37 @@ export function buildApiRouter() {
   router.get('/devices', requireAuthApi, async (req, res, next) => {
     try {
       res.json({ devices: await listDevicesWithLastPosition() });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.post('/devices', requireAuthApi, async (req, res, next) => {
+    try {
+      const imei = String(req.body?.imei ?? '').trim();
+      const alias = optionalText(req.body?.alias, 100);
+      const placa = optionalText(req.body?.placa, 30);
+      if (!/^\d{15}$/.test(imei)) {
+        return res.status(400).json({ error: 'el IMEI debe contener exactamente 15 dígitos' });
+      }
+      if (alias === undefined || placa === undefined) {
+        return res.status(400).json({ error: 'alias (máx. 100) o placa (máx. 30) inválidos' });
+      }
+      const device = await createOrRestoreDevice({ imei, alias, placa });
+      logger.info({ imei, usuario: req.usuario }, 'equipo dado de alta o restaurado desde la interfaz');
+      res.status(201).json({ device, message: 'Equipo agregado. Si ya existía archivado, se restauró con su historial.' });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.delete('/devices/:imei', requireAuthApi, async (req, res, next) => {
+    try {
+      const device = await getDeviceByImei(req.params.imei);
+      if (!device || device.archived_at) return res.status(404).json({ error: 'equipo no encontrado' });
+      const archived = await archiveDevice(device.id);
+      logger.info({ imei: device.imei, usuario: req.usuario }, 'equipo archivado desde la interfaz');
+      res.json({ device: archived, message: 'Equipo quitado de la flotilla. Su historial se conservó.' });
     } catch (err) {
       next(err);
     }
@@ -265,4 +298,12 @@ function nullableNumber(v, min, max) {
 }
 function nullableInteger(v, min, max) {
   const n = nullableNumber(v, min, max); return n === null || n === undefined ? n : Number.isInteger(n) ? n : undefined;
+}
+
+function optionalText(v, maxLength) {
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v !== 'string') return undefined;
+  const clean = v.trim();
+  if (!clean) return null;
+  return clean.length <= maxLength ? clean : undefined;
 }
