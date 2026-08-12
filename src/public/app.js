@@ -19,6 +19,7 @@ const estado = {
   mapasMosaico: new Map(), // imei -> { map, marker, tile }
   mapa3d: null,
   marcador3d: null,
+  vistaMovil: 'mapa',
   ws: null,
   reintentoWs: 1000,
   yaCentro: false,
@@ -58,6 +59,108 @@ let capaBase = crearCapaBase(estado.temaMapa).addTo(mapa);
 function crearCapaBase(tema) {
   const def = TEMAS_MAPA[tema] ?? TEMAS_MAPA.calles;
   return L.tileLayer(def.url, def.options);
+}
+
+// ── shell móvil ─────────────────────────────────────────────────────────────
+const mediaMovil = window.matchMedia('(max-width: 820px)');
+
+function esMovil() {
+  return mediaMovil.matches;
+}
+
+function actualizarNavegacionMovil(vista) {
+  estado.vistaMovil = vista;
+  document.querySelectorAll('[data-vista-movil]').forEach((button) => {
+    const active = button.dataset.vistaMovil === vista;
+    button.classList.toggle('activo', active);
+    if (active) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  });
+}
+
+function actualizarPanelMovil(open) {
+  const sidebar = document.getElementById('sidebar');
+  sidebar.classList.toggle('abierto', open);
+  document.body.classList.toggle('panel-movil-abierto', open);
+  const toggle = document.getElementById('alternar-panel');
+  toggle.textContent = open ? '▼' : '▲';
+  toggle.setAttribute('aria-expanded', String(open));
+  document.getElementById('asa-panel').setAttribute('aria-expanded', String(open));
+  if (!open) actualizarNavegacionMovil('mapa');
+  programarResizeMapas();
+}
+
+function mostrarVistaMovil(vista, { suave = true } = {}) {
+  if (!esMovil()) return;
+  if (vista === 'mapa') {
+    actualizarPanelMovil(false);
+    return;
+  }
+
+  let target;
+  if (vista === 'gps') {
+    target = estado.seleccionado ? document.getElementById('seccion-detalle') : document.getElementById('seccion-equipos');
+    if (!estado.seleccionado) vista = 'equipos';
+  } else if (vista === 'ruta') target = document.getElementById('seccion-recorrido');
+  else target = document.getElementById('seccion-equipos');
+
+  actualizarPanelMovil(true);
+  actualizarNavegacionMovil(vista);
+  requestAnimationFrame(() => {
+    const content = document.getElementById('contenido-panel');
+    const top = Math.max(0, target.offsetTop - content.offsetTop);
+    content.scrollTo({ top, behavior: suave ? 'smooth' : 'auto' });
+  });
+}
+
+let resizeMapasTimer;
+function programarResizeMapas() {
+  clearTimeout(resizeMapasTimer);
+  resizeMapasTimer = setTimeout(() => {
+    mapa.invalidateSize({ pan: false });
+    estado.mapa3d?.resize();
+    for (const item of estado.mapasMosaico.values()) item.map.invalidateSize({ pan: false });
+  }, 320);
+}
+
+function configurarInterfazMovil() {
+  document.querySelectorAll('[data-vista-movil]').forEach((button) => {
+    button.addEventListener('click', () => mostrarVistaMovil(button.dataset.vistaMovil));
+  });
+
+  const handle = document.getElementById('asa-panel');
+  let pointerStartY = null;
+  let ignorarClickHandle = false;
+  handle.addEventListener('click', () => {
+    if (ignorarClickHandle) {
+      ignorarClickHandle = false;
+      return;
+    }
+    actualizarPanelMovil(!document.getElementById('sidebar').classList.contains('abierto'));
+  });
+  handle.addEventListener('pointerdown', (event) => {
+    pointerStartY = event.clientY;
+    handle.setPointerCapture?.(event.pointerId);
+  });
+  handle.addEventListener('pointerup', (event) => {
+    if (pointerStartY === null) return;
+    const movement = event.clientY - pointerStartY;
+    pointerStartY = null;
+    if (Math.abs(movement) > 35) ignorarClickHandle = true;
+    if (movement > 35) actualizarPanelMovil(false);
+    else if (movement < -35) mostrarVistaMovil(estado.seleccionado ? 'gps' : 'equipos');
+  });
+  handle.addEventListener('pointercancel', () => { pointerStartY = null; });
+
+  mediaMovil.addEventListener?.('change', () => {
+    if (!esMovil()) {
+      document.getElementById('sidebar').classList.remove('abierto');
+      document.body.classList.remove('panel-movil-abierto');
+    } else actualizarNavegacionMovil('mapa');
+    programarResizeMapas();
+  });
+  window.addEventListener('orientationchange', programarResizeMapas);
+  window.visualViewport?.addEventListener('resize', programarResizeMapas);
 }
 
 // ── utilidades de formato ────────────────────────────────────────────────────
@@ -587,6 +690,7 @@ async function seleccionar(imei, centrar) {
   renderLista();
   renderDetalle();
   renderDepuracion();
+  mostrarVistaMovil('gps');
 
   const m = estado.marcadores.get(imei);
   if (centrar && m) mapa.setView(m.getLatLng(), Math.max(mapa.getZoom(), 15));
@@ -841,6 +945,7 @@ async function cargarEquipos() {
 }
 
 async function iniciar() {
+  configurarInterfazMovil();
   try {
     estado.config = await api('/api/config');
   } catch {
@@ -917,8 +1022,11 @@ async function iniciar() {
 
   const sidebar = document.getElementById('sidebar');
   document.getElementById('alternar-panel').addEventListener('click', (e) => {
-    sidebar.classList.toggle('abierto');
-    e.currentTarget.textContent = sidebar.classList.contains('abierto') ? '▼' : '▲';
+    if (esMovil()) {
+      const open = !sidebar.classList.contains('abierto');
+      if (open) mostrarVistaMovil(estado.seleccionado ? 'gps' : 'equipos');
+      else actualizarPanelMovil(false);
+    }
   });
 }
 

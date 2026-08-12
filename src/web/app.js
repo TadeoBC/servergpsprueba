@@ -47,6 +47,12 @@ export function buildApp() {
   app.get('/styles.css', (req, res) => {
     res.sendFile(path.join(PUBLIC_DIR, 'styles.css'));
   });
+  app.get('/manifest.webmanifest', (req, res) => {
+    res.type('application/manifest+json').sendFile(path.join(PUBLIC_DIR, 'manifest.webmanifest'));
+  });
+  app.get('/icon-gps.svg', (req, res) => {
+    res.type('image/svg+xml').sendFile(path.join(PUBLIC_DIR, 'icon-gps.svg'));
+  });
 
   app.get('/login', (req, res) => {
     if (getSessionFromRequest(req)) return res.redirect('/');

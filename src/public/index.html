@@ -3,17 +3,23 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0e1116" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="atlyx GPS" />
   <title>atlyx GPS — flotilla</title>
 
   <!-- Leaflet por CDN: sin paso de compilación. Si el VPS no tiene salida a
        internet, descarga estos dos archivos y sírvelos desde /public. -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" />
+  <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <div id="app">
-    <aside id="sidebar">
+    <aside id="sidebar" aria-label="Panel de flotilla">
+      <button class="asa-panel" id="asa-panel" type="button" aria-label="Abrir o cerrar panel"><span></span></button>
       <div class="encabezado">
         <h1>atlyx <span class="marca">GPS</span></h1>
         <div class="espaciador"></div>
@@ -23,7 +29,8 @@
         <button class="btn pequeno" id="salir" type="button">Salir</button>
       </div>
 
-      <section class="seccion">
+      <div id="contenido-panel">
+        <section class="seccion" id="seccion-equipos">
         <h2>Equipos (<span id="conteo">0</span>)</h2>
         <div id="lista"><div class="vacio">Cargando…</div></div>
         <details class="administrar-equipos">
@@ -36,9 +43,9 @@
             <div id="info-equipo" class="vacio" style="padding:0"></div>
           </form>
         </details>
-      </section>
+        </section>
 
-      <section class="seccion" id="seccion-detalle" hidden>
+        <section class="seccion" id="seccion-detalle" hidden>
         <h2>Detalle</h2>
         <div class="detalle" id="detalle"></div>
         <div class="controles">
@@ -64,9 +71,9 @@
           </div>
           <div id="historial-comandos" class="vacio" style="padding:0">Sin comandos.</div>
         </div>
-      </section>
+        </section>
 
-      <section class="seccion">
+        <section class="seccion" id="seccion-recorrido">
         <h2>Recorrido</h2>
         <div class="controles">
           <div class="atajos">
@@ -90,23 +97,24 @@
           <label class="check-fila"><input type="checkbox" id="ajustar-calles" checked /> Ajustar estela a calles</label>
           <div id="info-recorrido" class="vacio" style="padding:0"></div>
         </div>
-      </section>
+        </section>
 
-      <details class="depuracion">
+        <details class="depuracion">
         <summary>Integración API</summary>
         <div class="cuerpo controles">
           <div><label for="api-key-name">Nombre de la integración</label><input id="api-key-name" placeholder="Mi sistema" /></div>
           <button class="btn" id="generar-api-key" type="button">Generar clave API</button>
           <div id="api-key-result" class="vacio" style="padding:0">La clave secreta se muestra una sola vez.</div>
         </div>
-      </details>
+        </details>
 
-      <details class="depuracion" id="depuracion">
+        <details class="depuracion" id="depuracion">
         <summary>Panel de depuración</summary>
         <div class="cuerpo" id="cuerpo-depuracion">
           <div class="vacio" style="padding:0">Selecciona un equipo para ver su último paquete.</div>
         </div>
-      </details>
+        </details>
+      </div>
     </aside>
 
     <main id="area-mapas">
@@ -125,6 +133,13 @@
       <div id="mosaico" class="superficie-mapa mosaico" hidden></div>
     </main>
   </div>
+
+  <nav id="navegacion-movil" aria-label="Navegación principal">
+    <button type="button" data-vista-movil="mapa" class="activo" aria-current="page"><span aria-hidden="true">⌖</span><small>Mapa</small></button>
+    <button type="button" data-vista-movil="equipos"><span aria-hidden="true">●</span><small>Equipos</small></button>
+    <button type="button" data-vista-movil="gps"><span aria-hidden="true">◎</span><small>GPS</small></button>
+    <button type="button" data-vista-movil="ruta"><span aria-hidden="true">⌁</span><small>Ruta</small></button>
+  </nav>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>

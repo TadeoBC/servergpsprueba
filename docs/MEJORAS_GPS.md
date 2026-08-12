@@ -79,3 +79,17 @@ Al cargar un recorrido, `Ajustar estela a calles` solicita
 El ajuste tiene un límite total de tiempo y nunca impide mostrar el recorrido.
 El OSRM público es útil para pruebas; para una flotilla en producción se
 recomienda desplegar uno propio y configurar `MAP_MATCH_URL`.
+
+## Interfaz móvil
+
+En pantallas de hasta 820 px el mapa ocupa todo el viewport y el panel se
+convierte en una hoja inferior. La barra fija permite saltar entre Mapa,
+Equipos, GPS y Ruta; el asa y el botón de flecha abren o cierran el panel. Los
+controles respetan las áreas seguras de iPhone, usan blancos táctiles grandes y
+recalculan el tamaño de Leaflet/MapLibre al girar el teléfono o abrir el teclado.
+En horizontal, el panel cambia a hoja lateral para conservar altura útil.
+
+`manifest.webmanifest` y los metadatos de iOS permiten agregar el panel a la
+pantalla de inicio y abrirlo con apariencia de aplicación independiente. Esto
+no lo convierte en una app nativa: continúa siendo la misma web responsive y
+requiere conexión con el servidor.

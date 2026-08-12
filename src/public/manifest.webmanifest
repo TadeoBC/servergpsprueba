@@ -1,0 +1,19 @@
+{
+  "name": "atlyx GPS — Flotilla",
+  "short_name": "atlyx GPS",
+  "description": "Seguimiento en vivo de la flotilla GPS",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0e1116",
+  "theme_color": "#0e1116",
+  "icons": [
+    {
+      "src": "/icon-gps.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
