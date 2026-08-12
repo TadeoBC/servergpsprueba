@@ -1,6 +1,10 @@
 import { config } from '../config.js';
 import { logger } from '../logger.js';
-import { getOrCreateDevice, resolveDeviceByTerminalId, touchDevice, insertPosition, insertEvent } from '../db/repo.js';
+import {
+  getOrCreateDevice, resolveDeviceByTerminalId, touchDevice, insertPosition,
+  insertEvent, updateDeviceTelemetry, evaluateSpeedAlert,
+  resolveDeviceCommand,
+} from '../db/repo.js';
 import { bus, recordPacket } from './bus.js';
 
 /**
@@ -54,6 +58,15 @@ export async function processDecoded(decoded, session) {
     logger.error({ err: err.message, imei: device.imei }, 'no se pudo actualizar last_seen_at'),
   );
 
+  const telemetryPatch = extractTelemetry(decoded);
+  if (Object.keys(telemetryPatch).length) {
+    const state = await updateDeviceTelemetry(device.id, telemetryPatch).catch((err) => {
+      logger.error({ err: err.message, imei: device.imei }, 'no se pudo actualizar la telemetría');
+      return null;
+    });
+    if (state) bus.emit('telemetry', { device, telemetry: state.telemetry, updatedAt: state.telemetry_updated_at });
+  }
+
   const guardadas = [];
 
   // Un 0x0704 de JT808 trae varias posiciones en una sola trama.
@@ -78,7 +91,7 @@ export async function processDecoded(decoded, session) {
     }).catch((err) => logger.error({ err: err.message }, 'no se pudo guardar el evento de login'));
   }
 
-  if (decoded.type === 'alarma' || decoded.alarmType) {
+  if (decoded.type === 'alarma' || (decoded.alarmType && decoded.alarmType !== 'normal')) {
     await insertEvent({
       deviceId: device.id,
       tipo: `alarma:${decoded.alarmType ?? 'desconocida'}`,
@@ -90,6 +103,23 @@ export async function processDecoded(decoded, session) {
       },
     }).catch((err) => logger.error({ err: err.message }, 'no se pudo guardar la alarma'));
     logger.warn({ imei: device.imei, alarma: decoded.alarmType }, 'alarma recibida del equipo');
+    bus.emit('alert', {
+      device,
+      tipo: `alarma:${decoded.alarmType ?? 'desconocida'}`,
+      position: guardadas[0] ?? null,
+      data: { origen: 'tracker', attributes: decoded.attributes },
+    });
+  }
+
+  if (decoded.type === 'texto' && decoded.attributes?.server_flag !== undefined) {
+    const command = await resolveDeviceCommand(decoded.attributes.server_flag, decoded.attributes.texto ?? '')
+      .catch((err) => { logger.error({ err: err.message }, 'no se pudo asociar la respuesta al comando'); return null; });
+    if (command) {
+      bus.emit('command', { device, command });
+      await insertEvent({ deviceId: device.id, tipo: `comando:${command.status}`, raw: {
+        command_id: command.id, command_type: command.command_type, response: command.response_text,
+      }}).catch((err) => logger.error({ err: err.message }, 'no se pudo guardar respuesta de comando'));
+    }
   }
 
   if (decoded.type === 'desconocido' || decoded.type === 'invalido') {
@@ -163,5 +193,34 @@ async function savePosition(device, position, decoded, attributes) {
   );
 
   bus.emit('position', { device, position: fila });
+
+  const speedState = await evaluateSpeedAlert(device, fila).catch((err) => {
+    logger.error({ err: err.message, imei: device.imei }, 'no se pudo evaluar el límite de velocidad');
+    return null;
+  });
+  if (speedState?.entered) {
+    const event = {
+      deviceId: device.id, tipo: 'alerta:exceso_velocidad', positionId: fila.id,
+      raw: { velocidad_kmh: fila.speed_kmh, limite_kmh: speedState.speed_limit_kmh },
+    };
+    await insertEvent(event).catch((err) => logger.error({ err: err.message }, 'no se pudo guardar la alerta de velocidad'));
+    bus.emit('alert', { device, tipo: event.tipo, position: fila, data: event.raw });
+  } else if (speedState?.cleared) {
+    await insertEvent({ deviceId: device.id, tipo: 'alerta:velocidad_normalizada', positionId: fila.id,
+      raw: { velocidad_kmh: fila.speed_kmh, limite_kmh: speedState.speed_limit_kmh } })
+      .catch((err) => logger.error({ err: err.message }, 'no se pudo guardar el fin de alerta de velocidad'));
+  }
   return fila;
+}
+
+function extractTelemetry(decoded) {
+  const a = decoded.attributes ?? {};
+  const out = {};
+  if (a.bateria) out.bateria = a.bateria;
+  if (a.gsm_signal !== undefined) out.gsm_signal = a.gsm_signal;
+  if (a.terminal) out.terminal = a.terminal;
+  if (a.acc_encendido !== undefined) out.acc_encendido = a.acc_encendido;
+  if (a.odometro) out.odometro = a.odometro;
+  if (a.gps_fijado !== undefined) out.gps_fijado = a.gps_fijado;
+  return out;
 }

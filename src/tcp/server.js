@@ -4,6 +4,7 @@ import { logger } from '../logger.js';
 import { FrameAccumulator, decodeFrame } from './framing.js';
 import { ConnectionLimiter } from './ratelimit.js';
 import { processDecoded } from '../ingest/pipeline.js';
+import { registerDeviceConnection, unregisterDeviceConnection } from '../commands/dispatcher.js';
 
 let conexionSeq = 0;
 
@@ -90,6 +91,7 @@ export function createTcpServer() {
     });
 
     socket.on('close', () => {
+      if (session.imei) unregisterDeviceConnection(session.imei, socket);
       liberar();
       log.info({ imei: session.imei ?? null }, 'conexión cerrada');
     });
@@ -120,16 +122,22 @@ async function manejarTrama(frame, { socket, session, log }) {
     );
   }
 
-  await processDecoded(decoded, session);
+  const processed = await processDecoded(decoded, session);
 
   if (decoded.reply && !socket.destroyed) {
-    socket.write(decoded.reply, (err) => {
+    await new Promise((resolve) => socket.write(decoded.reply, (err) => {
       if (err) log.warn({ err: err.message }, 'no se pudo enviar la respuesta al equipo');
-    });
+      resolve();
+    }));
     log.debug(
       { tipo: decoded.type, respuesta: decoded.reply.toString('hex').toUpperCase() },
       'respuesta enviada al equipo',
     );
+  }
+
+  // El ACK de login siempre sale antes que cualquier comando pendiente.
+  if (decoded.type === 'login' && processed.device && !socket.destroyed) {
+    await registerDeviceConnection(processed.device, socket);
   }
 }
 

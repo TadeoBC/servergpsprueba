@@ -7,7 +7,13 @@ import {
   getDeviceByImei,
   getLastPosition,
   listPositions,
+  listEvents,
+  updateDeviceSettings,
+  listDeviceCommands,
 } from '../db/repo.js';
+import { createApiKey, listApiKeys, revokeApiKey } from './api-keys.js';
+import { buildAllowedCommand, COMMAND_CATALOG, CommandValidationError } from '../commands/catalog.js';
+import { queueDeviceCommand, isDeviceOnline } from '../commands/dispatcher.js';
 import { getPackets, getUnidentifiedPackets } from '../ingest/bus.js';
 import { decodeFrame, FrameAccumulator } from '../tcp/framing.js';
 import {
@@ -134,6 +140,75 @@ export function buildApiRouter() {
     }
   });
 
+  router.get('/devices/:imei/events', requireAuthApi, async (req, res, next) => {
+    try {
+      const device = await getDeviceByImei(req.params.imei);
+      if (!device) return res.status(404).json({ error: 'equipo no encontrado' });
+      const desde = parseFecha(req.query.desde);
+      if (req.query.desde && !desde) return res.status(400).json({ error: 'parámetro "desde" inválido (usa ISO 8601)' });
+      res.json({ events: await listEvents(device.id, { desde, limit: clampLimit(req.query.limit) }) });
+    } catch (err) { next(err); }
+  });
+
+  router.patch('/devices/:imei/settings', requireAuthApi, async (req, res, next) => {
+    try {
+      const device = await getDeviceByImei(req.params.imei);
+      if (!device) return res.status(404).json({ error: 'equipo no encontrado' });
+      const speed = nullableNumber(req.body?.speed_limit_kmh, 1, 300);
+      const interval = nullableInteger(req.body?.report_interval_seconds, 10, 86400);
+      if (speed === undefined || interval === undefined) return res.status(400).json({ error: 'límite (1-300 km/h) o intervalo (10-86400 s) inválido' });
+      const updated = await updateDeviceSettings(device.id, { speedLimitKmh: speed, reportIntervalSeconds: interval });
+      res.json({ device: updated, aviso: 'El intervalo queda registrado. Aplicarlo al hardware requiere confirmar el comando del firmware S11L.' });
+    } catch (err) { next(err); }
+  });
+
+  router.get('/commands/catalog', requireAuthApi, (req, res) => res.json({ commands: COMMAND_CATALOG }));
+
+  router.get('/devices/:imei/commands', requireAuthApi, async (req, res, next) => {
+    try {
+      const device = await getDeviceByImei(req.params.imei);
+      if (!device) return res.status(404).json({ error: 'equipo no encontrado' });
+      res.json({ online: isDeviceOnline(device.imei), commands: await listDeviceCommands(device.id, { limit: clampLimit(req.query.limit) }) });
+    } catch (err) { next(err); }
+  });
+
+  router.post('/devices/:imei/commands', requireAuthApi, async (req, res, next) => {
+    try {
+      const device = await getDeviceByImei(req.params.imei);
+      if (!device) return res.status(404).json({ error: 'equipo no encontrado' });
+      const command = buildAllowedCommand(req.body?.type, req.body?.params ?? {});
+      const queued = await queueDeviceCommand({ device, command, requestedBy: req.usuario });
+      if (command.settings) {
+        await updateDeviceSettings(device.id, {
+          speedLimitKmh: device.speed_limit_kmh ?? null,
+          reportIntervalSeconds: command.settings.reportIntervalSeconds,
+        });
+      }
+      res.status(202).json({ command: queued,
+        message: queued.online ? 'comando enviado; esperando respuesta' : 'equipo offline; comando en cola' });
+    } catch (err) {
+      if (err instanceof CommandValidationError) return res.status(400).json({ error: err.message });
+      next(err);
+    }
+  });
+
+  router.get('/api-keys', requireAuthApi, async (req, res, next) => {
+    try { res.json({ api_keys: await listApiKeys() }); } catch (err) { next(err); }
+  });
+  router.post('/api-keys', requireAuthApi, async (req, res, next) => {
+    try {
+      const name = String(req.body?.name ?? '').trim();
+      if (!name || name.length > 100) return res.status(400).json({ error: 'nombre requerido (máximo 100 caracteres)' });
+      const expiresAt = req.body?.expires_at ? parseFecha(req.body.expires_at) : null;
+      if (req.body?.expires_at && !expiresAt) return res.status(400).json({ error: 'expires_at inválido' });
+      const apiKey = await createApiKey({ name, expiresAt });
+      res.status(201).json({ api_key: apiKey, aviso: 'Guarda key ahora: no volverá a mostrarse.' });
+    } catch (err) { next(err); }
+  });
+  router.delete('/api-keys/:id', requireAuthApi, async (req, res, next) => {
+    try { const row = await revokeApiKey(req.params.id); res.status(row ? 200 : 404).json(row ? { ok: true } : { error: 'clave no encontrada o ya revocada' }); } catch (err) { next(err); }
+  });
+
   // ── depuración ─────────────────────────────────────────────────────────────
   // Últimas tramas decodificadas campo por campo. Esto NO es adorno: es lo que
   // permite ver qué byte produjo una coordenada rara.
@@ -182,4 +257,12 @@ function parseFecha(v) {
   if (!v) return null;
   const d = new Date(v);
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+function nullableNumber(v, min, max) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v); return Number.isFinite(n) && n >= min && n <= max ? n : undefined;
+}
+function nullableInteger(v, min, max) {
+  const n = nullableNumber(v, min, max); return n === null || n === undefined ? n : Number.isInteger(n) ? n : undefined;
 }

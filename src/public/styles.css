@@ -150,7 +150,7 @@ button, input, select { font: inherit; color: inherit; }
 /* ── rango de fechas ───────────────────────────────────────────────────────── */
 .controles { padding: 10px 14px 14px; display: flex; flex-direction: column; gap: 8px; }
 .controles label { font-size: 11px; color: var(--texto-2); text-transform: uppercase; letter-spacing: .6px; }
-.controles input[type="datetime-local"], .controles select {
+.controles input, .controles select {
   background: var(--panel-2);
   border: 1px solid var(--borde);
   border-radius: 6px;
@@ -159,6 +159,12 @@ button, input, select { font: inherit; color: inherit; }
 }
 .botonera { display: flex; gap: 8px; flex-wrap: wrap; }
 .atajos { display: flex; gap: 6px; flex-wrap: wrap; }
+.comandos { border-top: 1px dashed var(--borde); }
+.comando-fila { display:grid; grid-template-columns:1fr auto; gap:3px 8px; padding:5px 0; border-bottom:1px solid var(--borde); font-size:11px; }
+.comando-fila small { grid-column:1 / -1; color:var(--texto-2); word-break:break-word; }
+.estado-acknowledged { color:var(--verde); }
+.estado-failed, .estado-expired { color:var(--rojo); }
+.estado-sent, .estado-queued { color:var(--ambar); }
 
 /* ── depuración ────────────────────────────────────────────────────────────── */
 details.depuracion { border-top: 1px solid var(--borde); }

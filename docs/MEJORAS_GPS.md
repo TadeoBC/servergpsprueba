@@ -1,0 +1,62 @@
+# Mejoras de rastreo y operación
+
+## Posición y estela
+
+El mapa conserva la última coordenada válida si un heartbeat o un paquete sin
+fix llega después. Al seleccionar un equipo carga automáticamente seis horas de
+recorrido y continúa extendiendo la línea con las posiciones recibidas por
+WebSocket. Los botones permiten consultar 1 h, 6 h, 24 h o 7 días.
+
+## Telemetría
+
+La batería, señal GSM, ACC, estado de fix y odómetro se almacenan en
+`devices.telemetry`. Ya no dependen de que la última trama sea precisamente un
+heartbeat. El firmware S11L observado informa batería en escala cruda 0–15,
+mientras el GT06 clásico usa 0–6; el decoder admite ambas y marca el porcentaje
+como aproximado.
+
+En las tramas reales `0x12` del S11L, los cuatro bytes posteriores a LBS se
+interpretan como odómetro extendido. Se conserva `valor_crudo` y se muestra una
+estimación en kilómetros asumiendo metros, porque ciertos firmwares permiten
+cambiar esa unidad.
+
+## Alertas
+
+Cada equipo acepta `speed_limit_kmh`. El servidor crea un evento al cruzar de
+velocidad normal a exceso y otro al normalizarse; no genera una alerta repetida
+en cada pulsación mientras continúa excedido. La entrada se difunde en vivo al
+panel. Las alarmas originadas por el propio rastreador también se difunden y el
+usuario puede habilitar notificaciones del navegador.
+
+## Comandos remotos S11L
+
+El servidor implementa `0x80` (servidor a equipo) y correlaciona respuestas
+`0x15`/`0x21` por el `server_flag` de cuatro bytes. La cola es durable: si el
+equipo está offline entrega el comando tras su próximo login. Estados posibles:
+`queued`, `sent`, `acknowledged`, `failed` y `expired`.
+
+Solo se aceptan instrucciones documentadas para S11L:
+
+- `TIMER,T1#`, entre 5 y 18 000 segundos.
+- `HBT,T#`, entre 1 y 1 440 minutos.
+- `PARAM#` y `STATUS#`.
+- `SENALM,ON|OFF,M#` y `BATALM,ON|OFF,M#`, con modo 0–3.
+
+No existe endpoint para texto arbitrario. Reinicio, cambio de servidor/APN y
+acciones sobre motor quedan excluidos para evitar perder conectividad o afectar
+un vehículo por accidente. La especificación detallada está en
+[`COMANDOS_S11L.md`](COMANDOS_S11L.md).
+
+## Aplicación segura de cambios
+
+Las migraciones son aditivas y se ejecutan al arrancar. Antes de producción:
+
+```bash
+docker compose exec db pg_dump -U atlyx -d atlyx_gps -Fc -f /tmp/antes-mejoras.dump
+docker compose up -d --build
+docker compose logs -f app
+```
+
+Verifica `/api/health`, el marcador, batería, una ruta y luego genera la clave
+API. Antes de usar alarmas con modo SMS/llamada, configura y comprueba el número
+central del dispositivo según el proveedor de la SIM.

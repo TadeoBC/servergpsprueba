@@ -99,6 +99,52 @@ test('el heartbeat 0x13 se responde y decodifica batería y señal', () => {
   assert.equal(msg.reply.readUInt16BE(4), 0x0021);
 });
 
+test('heartbeat real S11L usa escala de batería 0..15', () => {
+  const msg = gt06.decode(Buffer.from('78780A13400F0300020007A23B0D0A', 'hex'));
+  assert.equal(msg.crcOk, true);
+  assert.deepEqual(msg.attributes.bateria, { nivel: 15, escala_max: 15, etiqueta: 'lleno', porcentaje_aprox: 100 });
+});
+
+test('alarma real S11L respeta byte de longitud LBS y batería', () => {
+  const raw = '787826161A080B17360CCF022FB56D0AB98D52000C0009000000000000000000000E010E02000106960D0A';
+  const msg = gt06.decode(Buffer.from(raw, 'hex'));
+  assert.equal(msg.crcOk, true);
+  assert.equal(msg.alarmType, 'bateria_baja_gps');
+  assert.equal(msg.attributes.bateria.nivel, 14);
+  assert.equal(msg.attributes.bateria.escala_max, 15);
+  assert.deepEqual(msg.attributes.lbs, { mcc: 0, mnc: 0, lac: 0, cell_id: 0 });
+  assert.equal(msg.attributes.unmapped, undefined);
+});
+
+test('0x94 corto se clasifica como información, no trama desconocida', () => {
+  const msg = gt06.decode(Buffer.from('79790008940000000079E4670D0A', 'hex'));
+  assert.equal(msg.type, 'informacion');
+  assert.equal(msg.attributes.info_subtipo, 0);
+  assert.equal(msg.attributes.info_valor_crudo, 0);
+});
+
+test('comando 0x80 y respuesta 0x15 conservan server flag y texto', () => {
+  const frame = gt06.buildCommandFrame('TIMER,60#', { serverFlag: 0x12345678, serial: 9 });
+  const parsed = gt06.parseFrame(frame);
+  assert.equal(parsed.protocolNumber, 0x80);
+  assert.equal(parsed.crcOk, true);
+  assert.equal(parsed.payload[0], 4 + 'TIMER,60#'.length);
+  assert.equal(parsed.payload.readUInt32BE(1), 0x12345678);
+  assert.equal(parsed.payload.subarray(5, 14).toString('ascii'), 'TIMER,60#');
+
+  const responseText = Buffer.from('SET OK!', 'ascii');
+  const responsePayload = Buffer.alloc(1 + 4 + responseText.length + 2);
+  responsePayload[0] = 4 + responseText.length;
+  responsePayload.writeUInt32BE(0x12345678, 1);
+  responseText.copy(responsePayload, 5);
+  responsePayload.writeUInt16BE(2, 5 + responseText.length);
+  const response = gt06.decode(gt06.encodeFrame(gt06.PROTOCOL_STRING, responsePayload, 10));
+  assert.equal(response.attributes.server_flag, 0x12345678);
+  assert.equal(response.attributes.texto, 'SET OK!');
+  assert.equal(response.attributes.idioma, 2);
+  assert.equal(response.attributes.unmapped, undefined);
+});
+
 // ── posiciones ───────────────────────────────────────────────────────────────
 
 test('posición 0x12: coordenadas de San Juan del Río con los signos correctos', () => {
@@ -220,6 +266,22 @@ test('el 0x22 deja sin mapear los bytes posteriores al LBS, con su TODO', () => 
   assert.match(msg.attributes.unmapped.nota, /TODO/);
   assert.equal(msg.attributes.unmapped.hex, '01000000001234');
   assert.equal(msg.attributes.unmapped.len, 7);
+});
+
+test('trama real S11L 0x12: decodifica los 4 bytes finales como odómetro conservando el crudo', () => {
+  const raw = '787823121A080C113431CF022FB2EB0AB9828B001D5D000000000000000000218615001C3F710D0A';
+  const msg = gt06.decode(Buffer.from(raw, 'hex'));
+  assert.equal(msg.crcOk, true);
+  assert.equal(msg.position.speedKmh, 0);
+  assert.equal(msg.position.satellites, 15);
+  assert.ok(Math.abs(msg.position.latitude - 20.378015) < 1e-6);
+  assert.ok(Math.abs(msg.position.longitude - -99.9609661111111) < 1e-6);
+  assert.deepEqual(msg.attributes.odometro, {
+    valor_crudo: 0x00218615,
+    kilometros_estimados: 0x00218615 / 1000,
+    unidad_asumida: 'metros',
+  });
+  assert.equal(msg.attributes.unmapped, undefined);
 });
 
 // ── alarmas ──────────────────────────────────────────────────────────────────

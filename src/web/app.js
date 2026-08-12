@@ -5,6 +5,7 @@ import pinoHttp from 'pino-http';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { buildApiRouter } from './routes.js';
+import { buildPublicApiRouter } from './public-api.js';
 import { requireAuthPage, getSessionFromRequest } from './auth.js';
 
 const PUBLIC_DIR = path.resolve(fileURLToPath(new URL('../public', import.meta.url)));
@@ -37,6 +38,7 @@ export function buildApp() {
   });
 
   app.use('/api', buildApiRouter());
+  app.use('/api/v1', buildPublicApiRouter());
 
   // ── páginas ────────────────────────────────────────────────────────────────
   // La hoja de estilos se sirve SIN sesión: la necesita la propia pantalla de

@@ -34,6 +34,10 @@ export class FieldReader {
     return this.remaining >= n;
   }
 
+  peek(n) {
+    return this.has(n) ? this.buf.subarray(this.off, this.off + n) : null;
+  }
+
   /** Avanza n bytes sin registrar campo. */
   skip(n) {
     this.off += n;

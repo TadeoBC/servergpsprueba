@@ -6,6 +6,7 @@ const estado = {
   config: { timezone: 'America/Mexico_City', umbrales: { verde_min: 5, ambar_min: 30 } },
   equipos: new Map(), // imei -> device (con last_position)
   paquetes: new Map(), // imei -> [paquete] (los últimos, para depuración)
+  comandos: new Map(), // imei -> últimos comandos remotos
   seleccionado: null,
   marcadores: new Map(), // imei -> L.Marker
   recorrido: null, // L.Polyline
@@ -68,7 +69,7 @@ function desdeHace(iso) {
 
 /** Semáforo: verde <5 min, ámbar <30 min, rojo si más. Gris si nunca reportó. */
 function claseEstado(device) {
-  const ref = device.last_position?.server_time ?? device.last_seen_at;
+  const ref = device.last_seen_at ?? device.telemetry_updated_at ?? device.last_position?.server_time;
   if (!ref) return 'gris';
   const min = (Date.now() - new Date(ref).getTime()) / 60000;
   if (min < estado.config.umbrales.verde_min) return 'verde';
@@ -122,7 +123,7 @@ function renderLista() {
   cont.innerHTML = equipos
     .map((d) => {
       const p = d.last_position;
-      const ref = p?.device_time ?? p?.server_time ?? d.last_seen_at;
+      const ref = d.last_seen_at ?? p?.server_time ?? p?.device_time;
       return `
       <div class="equipo ${estado.seleccionado === d.imei ? 'seleccionado' : ''}" data-imei="${esc(d.imei)}">
         <span class="punto ${claseEstado(d)}"></span>
@@ -154,17 +155,19 @@ function renderDetalle() {
 
   const p = d.last_position;
   const attrs = p?.attributes ?? {};
-  const bateria = attrs.bateria;
+  const telemetria = { ...(attrs ?? {}), ...(d.telemetry ?? {}) };
+  const bateria = telemetria.bateria;
 
   const filas = [
     ['IMEI', esc(d.imei)],
     ['Placa', esc(d.placa || '—')],
     ['Estado', d.activo ? 'activo' : '<span style="color:var(--ambar)">sin activar</span>'],
+    ['Último contacto', `${esc(fmtFecha(d.last_seen_at))}<br><span style="color:var(--texto-2)">${esc(desdeHace(d.last_seen_at))}</span>`],
   ];
 
   if (p) {
     filas.push(
-      ['Último reporte', `${esc(fmtFecha(p.device_time ?? p.server_time))}<br><span style="color:var(--texto-2)">${esc(desdeHace(p.device_time ?? p.server_time))}</span>`],
+      ['Última posición válida', `${esc(fmtFecha(p.device_time ?? p.server_time))}<br><span style="color:var(--texto-2)">${esc(desdeHace(p.device_time ?? p.server_time))}</span>`],
       ['Coordenadas', p.latitude !== null ? `${p.latitude.toFixed(6)}, ${p.longitude.toFixed(6)}` : '<span style="color:var(--ambar)">sin fix</span>'],
       ['Velocidad', num(p.speed_kmh, 1, ' km/h')],
       ['Rumbo', p.course === null ? '—' : num(p.course, 0, '°')],
@@ -179,14 +182,14 @@ function renderDetalle() {
         'Batería',
         `<div style="display:flex;align-items:center;gap:8px;justify-content:flex-end">
            <div class="barra-bateria"><i style="width:${Number(bateria.porcentaje_aprox ?? 0)}%"></i></div>
-           <span>${esc(bateria.etiqueta)} (${bateria.nivel}/6)</span>
+           <span>${esc(bateria.etiqueta)} (${bateria.nivel}/${bateria.escala_max ?? 6}, ~${bateria.porcentaje_aprox ?? '—'}%)</span>
          </div>`,
       ]);
     }
-    if (attrs.gsm_signal !== undefined) filas.push(['Señal GSM', `${attrs.gsm_signal}/4`]);
-    if (attrs.terminal?.acc_encendido !== undefined) filas.push(['ACC', attrs.terminal.acc_encendido ? 'encendido' : 'apagado']);
-    if (attrs.acc_encendido !== undefined) filas.push(['ACC', attrs.acc_encendido ? 'encendido' : 'apagado']);
-    if (attrs.extras?.kilometraje_km !== undefined) filas.push(['Kilometraje', num(attrs.extras.kilometraje_km, 1, ' km')]);
+    if (telemetria.gsm_signal !== undefined) filas.push(['Señal GSM', `${telemetria.gsm_signal}/4`]);
+    if (telemetria.terminal?.acc_encendido !== undefined) filas.push(['ACC', telemetria.terminal.acc_encendido ? 'encendido' : 'apagado']);
+    if (telemetria.acc_encendido !== undefined) filas.push(['ACC', telemetria.acc_encendido ? 'encendido' : 'apagado']);
+    if (telemetria.odometro?.kilometros_estimados !== undefined) filas.push(['Odómetro', num(telemetria.odometro.kilometros_estimados, 3, ' km')]);
   } else {
     filas.push(['Último reporte', 'todavía no reporta']);
   }
@@ -204,6 +207,8 @@ function renderDetalle() {
   }
 
   cont.innerHTML = html;
+  document.getElementById('limite-velocidad').value = d.speed_limit_kmh ?? '';
+  document.getElementById('intervalo-reporte').value = d.report_interval_seconds ?? '';
 }
 
 // ── panel de depuración ──────────────────────────────────────────────────────
@@ -366,6 +371,13 @@ async function seleccionar(imei, centrar) {
   } catch (err) {
     console.warn('no se pudieron traer los paquetes de depuración:', err.message);
   }
+  await cargarComandos(imei);
+  // La estela de las últimas seis horas aparece al seleccionar, sin exigir un
+  // clic adicional. Los controles permiten ampliar o reducir el rango.
+  const fin = new Date();
+  document.getElementById('hasta').value = fechaLocalAInput(fin);
+  document.getElementById('desde').value = fechaLocalAInput(new Date(fin.getTime() - 6 * 3600 * 1000));
+  cargarRecorrido();
 }
 
 // ── recorrido ────────────────────────────────────────────────────────────────
@@ -477,14 +489,50 @@ function conectarWs() {
 
     if (m.tipo === 'posicion') {
       const previo = estado.equipos.get(m.imei) ?? m.device;
-      const device = { ...previo, ...m.device, last_position: m.position };
+      // Un paquete sin fix no debe borrar la última coordenada confiable.
+      const usable = m.position?.valid && m.position.latitude !== null && m.position.longitude !== null;
+      const device = { ...previo, ...m.device, last_position: usable ? m.position : previo.last_position };
+      device.last_seen_at = m.position?.server_time ?? new Date().toISOString();
       estado.equipos.set(m.imei, device);
       actualizarMarcador(device);
+      if (usable && estado.seleccionado === m.imei && estado.recorrido) estado.recorrido.addLatLng([m.position.latitude, m.position.longitude]);
       renderLista();
       if (estado.seleccionado === m.imei) renderDetalle();
       if (!estado.yaCentro) {
         estado.yaCentro = true;
         encuadrarTodo();
+      }
+    }
+
+    if (m.tipo === 'telemetria') {
+      const d = estado.equipos.get(m.imei);
+      if (d) {
+        d.telemetry = m.telemetry;
+        d.telemetry_updated_at = m.telemetry_updated_at;
+        d.last_seen_at = m.telemetry_updated_at;
+        renderLista();
+        if (estado.seleccionado === m.imei) renderDetalle();
+      }
+    }
+
+    if (m.tipo === 'alerta') {
+      const d = estado.equipos.get(m.imei);
+      const label = nombre(d ?? { imei: m.imei });
+      const detalle = m.alerta === 'alerta:exceso_velocidad'
+        ? `exceso de velocidad (${m.data.velocidad_kmh} / ${m.data.limite_kmh} km/h)`
+        : m.alerta.replace(/^alarma:/, '').replaceAll('_', ' ');
+      document.getElementById('info-recorrido').textContent = `⚠ ${label}: ${detalle}`;
+      if (window.Notification?.permission === 'granted') new Notification(`Alerta GPS — ${label}`, { body: detalle });
+    }
+
+    if (m.tipo === 'comando') {
+      const list = estado.comandos.get(m.imei) ?? [];
+      const index = list.findIndex((c) => c.id === m.command.id);
+      if (index >= 0) list[index] = m.command; else list.unshift(m.command);
+      estado.comandos.set(m.imei, list);
+      if (estado.seleccionado === m.imei) {
+        renderComandos();
+        document.getElementById('info-ajustes').textContent = `Comando ${m.command.status}: ${m.command.response_text ?? ''}`;
       }
     }
 
@@ -572,6 +620,22 @@ async function iniciar() {
     location.href = '/login';
   });
 
+  document.getElementById('activar-notificaciones').addEventListener('click', async (e) => {
+    if (!window.Notification) return (e.currentTarget.textContent = 'No compatible');
+    const permission = await Notification.requestPermission();
+    e.currentTarget.textContent = permission === 'granted' ? 'Alertas ON' : 'Alertas bloqueadas';
+  });
+
+  document.getElementById('guardar-ajustes').addEventListener('click', guardarAjustes);
+  document.getElementById('aplicar-intervalo').addEventListener('click', () => enviarComando('set_interval', { seconds: Number(document.getElementById('intervalo-reporte').value) }));
+  document.getElementById('consultar-estado').addEventListener('click', () => enviarComando('query_status'));
+  document.getElementById('consultar-parametros').addEventListener('click', () => enviarComando('query_parameters'));
+  document.getElementById('vibracion-on').addEventListener('click', () => enviarComando('vibration_alarm', { enabled: true, mode: Number(document.getElementById('modo-alarma').value) }));
+  document.getElementById('vibracion-off').addEventListener('click', () => enviarComando('vibration_alarm', { enabled: false }));
+  document.getElementById('bateria-on').addEventListener('click', () => enviarComando('low_battery_alarm', { enabled: true, mode: Number(document.getElementById('modo-alarma').value) }));
+  document.getElementById('bateria-off').addEventListener('click', () => enviarComando('low_battery_alarm', { enabled: false }));
+  document.getElementById('generar-api-key').addEventListener('click', generarApiKey);
+
   const sidebar = document.getElementById('sidebar');
   document.getElementById('alternar-panel').addEventListener('click', (e) => {
     sidebar.classList.toggle('abierto');
@@ -580,3 +644,57 @@ async function iniciar() {
 }
 
 iniciar();
+
+async function guardarAjustes() {
+  const imei = estado.seleccionado;
+  if (!imei) return;
+  const info = document.getElementById('info-ajustes');
+  try {
+    const body = {
+      speed_limit_kmh: document.getElementById('limite-velocidad').value || null,
+      report_interval_seconds: document.getElementById('intervalo-reporte').value || null,
+    };
+    const data = await api(`/api/devices/${encodeURIComponent(imei)}/settings`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const d = estado.equipos.get(imei); d.speed_limit_kmh = data.device.speed_limit_kmh; d.report_interval_seconds = data.device.report_interval_seconds;
+    info.textContent = 'Guardado. ' + data.aviso;
+  } catch (err) { info.textContent = 'Error: ' + err.message; }
+}
+
+async function generarApiKey() {
+  const result = document.getElementById('api-key-result');
+  try {
+    const name = document.getElementById('api-key-name').value.trim();
+    const data = await api('/api/api-keys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+    const key = data.api_key.key;
+    const base = `${location.origin}/api/v1`;
+    result.innerHTML = `<b>Guárdala ahora:</b><div class="hex">${esc(key)}</div><div style="margin-top:6px">URL base: <code>${esc(base)}</code><br>Header: <code>Authorization: Bearer TU_CLAVE</code></div>`;
+  } catch (err) { result.textContent = 'Error: ' + err.message; }
+}
+
+async function enviarComando(type, params = {}) {
+  const imei = estado.seleccionado;
+  const info = document.getElementById('info-ajustes');
+  if (!imei) return;
+  try {
+    const data = await api(`/api/devices/${encodeURIComponent(imei)}/commands`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type, params }),
+    });
+    info.textContent = data.message;
+    await cargarComandos(imei);
+  } catch (err) { info.textContent = 'Error: ' + err.message; }
+}
+
+async function cargarComandos(imei) {
+  try {
+    const data = await api(`/api/devices/${encodeURIComponent(imei)}/commands?limit=20`);
+    estado.comandos.set(imei, data.commands ?? []);
+    if (estado.seleccionado === imei) renderComandos(data.online);
+  } catch (err) { console.warn('no se pudo cargar comandos:', err.message); }
+}
+
+function renderComandos(online) {
+  const el = document.getElementById('historial-comandos');
+  const list = estado.comandos.get(estado.seleccionado) ?? [];
+  const rows = list.slice(0, 8).map((c) => `<div class="comando-fila"><span>${esc(c.command_type)}</span><b class="estado-${esc(c.status)}">${esc(c.status)}</b>${c.response_text ? `<small>${esc(c.response_text)}</small>` : ''}</div>`).join('');
+  el.innerHTML = `<div>${online === undefined ? '' : online ? '● GPS conectado' : '○ GPS offline; se encolará'}</div>${rows || '<div>Sin comandos.</div>'}`;
+}

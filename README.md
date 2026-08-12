@@ -170,6 +170,12 @@ Configuración operativa recomendada proporcionada para el tracker:
 
 ## 7. Endpoints de la API
 
+La API de integración con claves revocables y GeoJSON está documentada en
+[`docs/API.md`](docs/API.md). Las mejoras de estela, estado persistente,
+odómetro, alertas y su despliegue están en [`docs/MEJORAS_GPS.md`](docs/MEJORAS_GPS.md).
+El canal remoto `0x80`, su cola y la lista permitida están en
+[`docs/COMANDOS_S11L.md`](docs/COMANDOS_S11L.md).
+
 `src/web/app.js` monta el router de `src/web/routes.js` bajo `/api`. Esta es la lista completa y exacta de rutas definidas allí:
 
 | Método | Ruta | Autenticación | Comportamiento real |

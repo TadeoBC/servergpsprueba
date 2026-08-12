@@ -17,6 +17,7 @@
         <h1>atlyx <span class="marca">GPS</span></h1>
         <div class="espaciador"></div>
         <span class="pastilla" id="estado-ws">conectando…</span>
+        <button class="btn pequeno" id="activar-notificaciones" type="button">Alertas</button>
         <button class="btn pequeno" id="alternar-panel" type="button" aria-label="Mostrar u ocultar el panel">▲</button>
         <button class="btn pequeno" id="salir" type="button">Salir</button>
       </div>
@@ -29,6 +30,28 @@
       <section class="seccion" id="seccion-detalle" hidden>
         <h2>Detalle</h2>
         <div class="detalle" id="detalle"></div>
+        <div class="controles">
+          <div><label for="limite-velocidad">Alerta de velocidad (km/h)</label><input type="number" id="limite-velocidad" min="1" max="300" placeholder="Sin límite" /></div>
+          <div><label for="intervalo-reporte">Intervalo deseado (segundos)</label><input type="number" id="intervalo-reporte" min="10" max="86400" placeholder="Sin configurar" /></div>
+          <button class="btn" id="guardar-ajustes" type="button">Guardar ajustes</button>
+          <button class="btn primario" id="aplicar-intervalo" type="button">Aplicar intervalo al GPS</button>
+          <div id="info-ajustes" class="vacio" style="padding:0"></div>
+        </div>
+        <div class="controles comandos">
+          <label>Comandos seguros S11L</label>
+          <div class="botonera">
+            <button class="btn pequeno" id="consultar-estado" type="button">Consultar estado</button>
+            <button class="btn pequeno" id="consultar-parametros" type="button">Consultar parámetros</button>
+          </div>
+          <div><label for="modo-alarma">Canal de alarma</label><select id="modo-alarma"><option value="0">Solo GPRS</option><option value="1">SMS + GPRS</option><option value="2">GPRS + SMS + llamada</option><option value="3">GPRS + llamada</option></select></div>
+          <div class="botonera">
+            <button class="btn pequeno" id="vibracion-on" type="button">Vibración ON</button>
+            <button class="btn pequeno" id="vibracion-off" type="button">Vibración OFF</button>
+            <button class="btn pequeno" id="bateria-on" type="button">Batería baja ON</button>
+            <button class="btn pequeno" id="bateria-off" type="button">Batería baja OFF</button>
+          </div>
+          <div id="historial-comandos" class="vacio" style="padding:0">Sin comandos.</div>
+        </div>
       </section>
 
       <section class="seccion">
@@ -55,6 +78,15 @@
           <div id="info-recorrido" class="vacio" style="padding:0"></div>
         </div>
       </section>
+
+      <details class="depuracion">
+        <summary>Integración API</summary>
+        <div class="cuerpo controles">
+          <div><label for="api-key-name">Nombre de la integración</label><input id="api-key-name" placeholder="Mi sistema" /></div>
+          <button class="btn" id="generar-api-key" type="button">Generar clave API</button>
+          <div id="api-key-result" class="vacio" style="padding:0">La clave secreta se muestra una sola vez.</div>
+        </div>
+      </details>
 
       <details class="depuracion" id="depuracion">
         <summary>Panel de depuración</summary>

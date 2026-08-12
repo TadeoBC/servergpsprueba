@@ -23,6 +23,7 @@ export const PROTOCOL_LOGIN = 0x01;
 export const PROTOCOL_LOCATION = 0x12;
 export const PROTOCOL_STATUS = 0x13; // heartbeat
 export const PROTOCOL_STRING = 0x15;
+export const PROTOCOL_COMMAND_RESPONSE = 0x21;
 export const PROTOCOL_ALARM = 0x16;
 export const PROTOCOL_GPS_QUERY = 0x1a;
 export const PROTOCOL_LOCATION_EXT = 0x22;
@@ -191,8 +192,12 @@ export function decode(frame) {
         r.unmapped('El equipo pide la hora del servidor; esta trama normalmente no trae payload.');
         break;
       case PROTOCOL_STRING:
+      case PROTOCOL_COMMAND_RESPONSE:
         msg.type = 'texto';
         decodeString(msg, r);
+        break;
+      case PROTOCOL_INFO:
+        decodeInfo(msg, r);
         break;
       default:
         msg.type = 'desconocido';
@@ -251,7 +256,14 @@ function decodeLocation(msg, r, protocolNumber) {
   msg.position = readGpsBlock(msg, r);
   readLbs(msg, r);
 
-  if (r.remaining > 0) {
+  // Algunos S11L/firmwares GT06 añaden exactamente cuatro bytes al 0x12.
+  // La especificación los define como kilometraje/odómetro. La unidad cambia
+  // entre firmwares; exponemos el entero crudo y una estimación en km usando
+  // metros, que es el modo observado en este equipo, sin ocultar la ambigüedad.
+  if (protocolNumber === PROTOCOL_LOCATION && r.remaining === 4) {
+    const raw = r.field('odometro', 4, (b) => b.readUInt32BE(0), 'Odómetro extendido de 4 bytes; unidad dependiente del firmware.');
+    msg.attributes.odometro = { valor_crudo: raw, kilometros_estimados: raw / 1000, unidad_asumida: 'metros' };
+  } else if (r.remaining > 0) {
     // El 0x22 documenta más campos después del LBS (ACC, modo de subida,
     // reenvío en tiempo real, kilometraje), pero el orden y el tamaño varían
     // entre firmwares. Preferimos dejarlos visibles sin mapear a inventar un
@@ -269,7 +281,12 @@ function decodeLocation(msg, r, protocolNumber) {
 function decodeAlarm(msg, r) {
   msg.type = 'alarma';
   msg.position = readGpsBlock(msg, r);
-  readLbs(msg, r);
+  let cellIdBytes = 3;
+  if (r.remaining >= 15 && r.peek(1)[0] === 0x09) {
+    r.field('longitud_lbs', 1, (b) => b[0], 'S11L: longitud del bloque LBS incluida ella misma.');
+    cellIdBytes = 4; // LTE: MCC(2)+MNC(1)+LAC(2)+CellID(4) = 9
+  }
+  readLbs(msg, r, cellIdBytes);
   if (r.has(1)) readTerminalInfo(msg, r);
   if (r.has(1)) readVoltageLevel(msg, r);
   if (r.has(1)) readGsmSignal(msg, r);
@@ -281,13 +298,30 @@ function decodeString(msg, r) {
   // Longitud del comando(1) + flag del servidor(4) + contenido ASCII.
   if (r.has(1)) {
     const len = r.field('longitud_comando', 1, (b) => b[0]);
-    if (r.has(4)) r.field('flag_servidor', 4, (b) => b.toString('hex').toUpperCase());
+    if (r.has(4)) msg.attributes.server_flag = r.field('flag_servidor', 4, (b) => b.readUInt32BE(0));
     const contentLen = Math.max(0, Math.min(len - 4, r.remaining));
     if (contentLen > 0) {
       msg.attributes.texto = r.field('contenido', contentLen, (b) => b.toString('ascii').replace(/\0+$/, ''));
     }
+    if (r.has(2)) msg.attributes.idioma = r.field('idioma', 2, (b) => b.readUInt16BE(0), '1=chino, 2=inglés');
   }
   if (r.remaining > 0) msg.attributes.unmapped = r.unmapped();
+}
+
+function decodeInfo(msg, r) {
+  msg.type = 'informacion';
+  if (r.has(1)) msg.attributes.info_subtipo = r.field('subtipo_info', 1, (b) => b[0]);
+  if (r.remaining === 2) {
+    msg.attributes.info_valor_crudo = r.field('valor_info', 2, (b) => b.readUInt16BE(0));
+  } else if (r.remaining >= 8) {
+    const candidate = r.peek(8);
+    if (/^[0-9]+$/.test(candidate.toString('hex'))) {
+      msg.attributes.terminal_id_info = r.field('terminal_id_info', 8, (b) => b.toString('hex').replace(/^0+/, ''));
+    }
+  }
+  if (r.remaining > 0) {
+    msg.attributes.unmapped = r.unmapped('Información 0x94 específica del firmware S11L; se conserva sin adivinar campos.');
+  }
 }
 
 // ── bloques compartidos ──────────────────────────────────────────────────────
@@ -401,13 +435,13 @@ function readGpsBlock(msg, r) {
 }
 
 /** LBS: MCC(2) + MNC(1) + LAC(2) + CellID(3). */
-function readLbs(msg, r) {
-  if (r.remaining < 8) return;
+function readLbs(msg, r, cellIdBytes = 3) {
+  if (r.remaining < 5 + cellIdBytes) return;
   const lbs = {
     mcc: r.field('mcc', 2, (b) => b.readUInt16BE(0)),
     mnc: r.field('mnc', 1, (b) => b[0]),
     lac: r.field('lac', 2, (b) => b.readUInt16BE(0)),
-    cell_id: r.field('cell_id', 3, (b) => b.readUIntBE(0, 3)),
+    cell_id: r.field('cell_id', cellIdBytes, (b) => b.readUIntBE(0, cellIdBytes)),
   };
   msg.attributes.lbs = lbs;
 }
@@ -426,12 +460,16 @@ function readTerminalInfo(msg, r) {
 }
 
 function readVoltageLevel(msg, r) {
-  const nivel = r.field('nivel_voltaje', 1, (b) => b[0], '0=sin energía … 6=lleno. No es un porcentaje real.');
+  const nivel = r.field('nivel_voltaje', 1, (b) => b[0], 'S11L observado: escala cruda 0..15; GT06 clásico usa 0..6.');
+  const max = nivel <= 6 ? 6 : nivel <= 15 ? 15 : null;
+  const porcentaje = max ? Math.round((nivel / max) * 100) : null;
   msg.attributes.bateria = {
     nivel: nivel,
-    etiqueta: VOLTAGE_LEVELS[nivel] ?? `desconocido_${nivel}`,
-    // Aproximación lineal solo para pintar la barra en la interfaz.
-    porcentaje_aprox: nivel >= 0 && nivel <= 6 ? Math.round((nivel / 6) * 100) : null,
+    escala_max: max,
+    etiqueta: nivel <= 6 ? (VOLTAGE_LEVELS[nivel] ?? `desconocido_${nivel}`)
+      : nivel <= 15 ? (porcentaje <= 20 ? 'muy_bajo' : porcentaje <= 40 ? 'bajo' : porcentaje <= 70 ? 'medio' : porcentaje < 100 ? 'alto' : 'lleno')
+      : `desconocido_${nivel}`,
+    porcentaje_aprox: porcentaje,
   };
 }
 
@@ -534,6 +572,20 @@ export function encodeFrame(protocolNumber, payload = Buffer.alloc(0), serial = 
     Buffer.from([(crc >> 8) & 0xff, crc & 0xff]),
     STOP_BYTES,
   ]);
+}
+
+/** Comando ASCII 0x80 del servidor al rastreador. */
+export function buildCommandFrame(command, { serverFlag = 1, serial = 1, language = 2 } = {}) {
+  if (typeof command !== 'string' || !/^[\x20-\x7E]{2,180}$/.test(command)) {
+    throw new Error('comando ASCII inválido');
+  }
+  const text = Buffer.from(command, 'ascii');
+  const payload = Buffer.alloc(1 + 4 + text.length + 2);
+  payload[0] = 4 + text.length;
+  payload.writeUInt32BE(serverFlag >>> 0, 1);
+  text.copy(payload, 5);
+  payload.writeUInt16BE(language, 5 + text.length);
+  return encodeFrame(0x80, payload, serial);
 }
 
 function hex16(n) {

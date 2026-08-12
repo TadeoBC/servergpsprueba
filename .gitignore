@@ -7,3 +7,4 @@ backups/
 caddy_data/
 caddy_config/
 pg_data/
+tmp/

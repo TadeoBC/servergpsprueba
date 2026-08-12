@@ -106,6 +106,58 @@ export async function touchDevice(deviceId) {
   await query('UPDATE devices SET last_seen_at = now() WHERE id = $1', [deviceId]);
 }
 
+export async function updateDeviceTelemetry(deviceId, patch) {
+  if (!patch || Object.keys(patch).length === 0) return null;
+  const { rows } = await query(
+    `UPDATE devices
+     SET telemetry = COALESCE(telemetry, '{}'::jsonb) || $2::jsonb,
+         telemetry_updated_at = now(), last_seen_at = now()
+     WHERE id = $1 RETURNING telemetry, telemetry_updated_at`,
+    [deviceId, JSON.stringify(patch)],
+  );
+  return rows[0] ?? null;
+}
+
+export async function updateDeviceSettings(deviceId, { speedLimitKmh, reportIntervalSeconds }) {
+  const { rows } = await query(
+    `UPDATE devices SET speed_limit_kmh = $2, report_interval_seconds = $3
+     WHERE id = $1 RETURNING *`,
+    [deviceId, speedLimitKmh, reportIntervalSeconds],
+  );
+  clearDeviceCache();
+  return rows[0] ?? null;
+}
+
+export async function evaluateSpeedAlert(device, position) {
+  if (!position?.valid || position.speed_kmh === null) return null;
+  const { rows } = await query(
+    `WITH settings AS (
+       SELECT speed_limit_kmh FROM devices WHERE id=$1
+     ), previous AS (
+       SELECT speeding FROM device_alert_state WHERE device_id=$1
+     ), upserted AS (
+       INSERT INTO device_alert_state (device_id, speeding, speeding_since)
+       SELECT $1, $2 > speed_limit_kmh,
+              CASE WHEN $2 > speed_limit_kmh THEN now() ELSE NULL END
+       FROM settings WHERE speed_limit_kmh IS NOT NULL
+       ON CONFLICT (device_id) DO UPDATE SET
+       speeding = EXCLUDED.speeding,
+       speeding_since = CASE
+         WHEN EXCLUDED.speeding AND NOT device_alert_state.speeding THEN now()
+         WHEN EXCLUDED.speeding THEN device_alert_state.speeding_since
+         ELSE NULL END,
+       updated_at = now()
+       RETURNING speeding, speeding_since
+     )
+     SELECT u.*, s.speed_limit_kmh,
+            (u.speeding AND NOT COALESCE(p.speeding, false)) AS entered,
+            (NOT u.speeding AND COALESCE(p.speeding, false)) AS cleared
+     FROM upserted u CROSS JOIN settings s LEFT JOIN previous p ON true`,
+    [device.id, Number(position.speed_kmh)],
+  );
+  return rows[0] ?? null;
+}
+
 /**
  * Inserta una posición. Devuelve la fila insertada, o null si fue descartada
  * por duplicado (mismo device_id + device_time): eso pasa cuando el equipo
@@ -156,6 +208,7 @@ export async function insertEvent({ deviceId = null, tipo, positionId = null, ra
 export async function listDevicesWithLastPosition() {
   const { rows } = await query(`
     SELECT d.id, d.imei, d.alias, d.placa, d.activo, d.last_seen_at, d.created_at,
+           d.speed_limit_kmh, d.report_interval_seconds, d.telemetry, d.telemetry_updated_at,
            p.id           AS position_id,
            ST_Y(p.geom::geometry) AS latitude,
            ST_X(p.geom::geometry) AS longitude,
@@ -164,7 +217,7 @@ export async function listDevicesWithLastPosition() {
     FROM devices d
     LEFT JOIN LATERAL (
       SELECT * FROM positions
-      WHERE device_id = d.id
+      WHERE device_id = d.id AND geom IS NOT NULL AND valid = true
       ORDER BY server_time DESC, id DESC
       LIMIT 1
     ) p ON true
@@ -184,12 +237,77 @@ export async function getLastPosition(deviceId) {
             speed_kmh, course, altitude, satellites, valid, device_time, server_time,
             protocol, attributes, raw_hex
      FROM positions
-     WHERE device_id = $1
+     WHERE device_id = $1 AND geom IS NOT NULL AND valid = true
      ORDER BY server_time DESC, id DESC
      LIMIT 1`,
     [deviceId],
   );
   return rows[0] ?? null;
+}
+
+export async function listEvents(deviceId, { desde = null, limit = 100 } = {}) {
+  const params = [deviceId];
+  let dateFilter = '';
+  if (desde) { params.push(desde); dateFilter = ` AND created_at >= $${params.length}`; }
+  params.push(limit);
+  const { rows } = await query(
+    `SELECT id, tipo, position_id, raw, created_at FROM events
+     WHERE device_id=$1${dateFilter} ORDER BY created_at DESC LIMIT $${params.length}`, params);
+  return rows;
+}
+
+export async function createDeviceCommand({ deviceId, commandType, commandText, serverFlag, requestedBy }) {
+  const { rows } = await query(
+    `INSERT INTO device_commands (device_id, command_type, command_text, server_flag, requested_by)
+     VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+    [deviceId, commandType, commandText, serverFlag, requestedBy ?? null],
+  );
+  return rows[0];
+}
+
+export async function listDeviceCommands(deviceId, { limit = 50 } = {}) {
+  await expireDeviceCommands();
+  const { rows } = await query(
+    `SELECT * FROM device_commands WHERE device_id=$1 ORDER BY id DESC LIMIT $2`, [deviceId, limit]);
+  return rows;
+}
+
+export async function getDeviceCommand(id) {
+  const { rows } = await query('SELECT * FROM device_commands WHERE id=$1', [id]);
+  return rows[0] ?? null;
+}
+
+export async function getQueuedDeviceCommands(deviceId) {
+  await expireDeviceCommands();
+  const { rows } = await query(
+    `SELECT * FROM device_commands WHERE device_id=$1 AND status='queued' AND expires_at > now()
+     ORDER BY id ASC LIMIT 20`, [deviceId]);
+  return rows;
+}
+
+export async function markDeviceCommandSent(id) {
+  const { rows } = await query(
+    `UPDATE device_commands SET status='sent', sent_at=now(), attempts=attempts+1
+     WHERE id=$1 AND status='queued' RETURNING *`, [id]);
+  return rows[0] ?? null;
+}
+
+export async function resolveDeviceCommand(serverFlag, responseText) {
+  const failed = /(?:ERROR|FAIL|INVALID|INCORRECT|ERR!)/i.test(responseText ?? '');
+  const { rows } = await query(
+    `UPDATE device_commands SET status=$2, response_text=$3, responded_at=now()
+     WHERE server_flag=$1 AND status IN ('queued','sent') RETURNING *`,
+    [serverFlag, failed ? 'failed' : 'acknowledged', responseText ?? ''],
+  );
+  return rows[0] ?? null;
+}
+
+export async function expireDeviceCommands() {
+  await query(
+    `UPDATE device_commands SET status='expired'
+     WHERE status IN ('queued','sent')
+       AND (expires_at <= now() OR (status='sent' AND sent_at < now() - interval '10 minutes'))`,
+  );
 }
 
 /**
@@ -235,6 +353,10 @@ function shapeDeviceRow(r) {
     alias: r.alias,
     placa: r.placa,
     activo: r.activo,
+    speed_limit_kmh: r.speed_limit_kmh,
+    report_interval_seconds: r.report_interval_seconds,
+    telemetry: r.telemetry ?? {},
+    telemetry_updated_at: r.telemetry_updated_at,
     last_seen_at: r.last_seen_at,
     created_at: r.created_at,
     last_position: r.position_id

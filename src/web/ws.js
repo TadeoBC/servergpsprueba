@@ -83,6 +83,18 @@ export function attachWebSocket(server) {
     });
   });
 
+  bus.on('telemetry', ({ device, telemetry, updatedAt }) => {
+    difundir({ tipo: 'telemetria', imei: device.imei, telemetry, telemetry_updated_at: updatedAt });
+  });
+
+  bus.on('alert', ({ device, tipo, position, data }) => {
+    difundir({ tipo: 'alerta', imei: device.imei, alerta: tipo, position, data });
+  });
+
+  bus.on('command', ({ device, command }) => {
+    difundir({ tipo: 'comando', imei: device.imei, command });
+  });
+
   // El panel de depuración también recibe las tramas que NO son posición
   // (login, heartbeat, alarmas, tramas raras), para poder verlas en vivo.
   bus.on('packet', ({ imei, decoded }) => {

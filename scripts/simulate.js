@@ -159,6 +159,7 @@ function arrancarEquipo(indice) {
   const etiqueta = `[${imei}]`;
   const recorrido = crearRecorrido(indice * 900);
   const historial = [];
+  let inbound = Buffer.alloc(0);
 
   let serial = 0;
   const siguienteSerial = () => (serial = (serial + 1) & 0xffff);
@@ -247,7 +248,38 @@ function arrancarEquipo(indice) {
 
   socket.on('data', (chunk) => {
     console.log(`${etiqueta} ← respuesta del servidor: ${chunk.toString('hex').toUpperCase()}`);
+    if (USAR_JT808) return;
+    inbound = Buffer.concat([inbound, chunk]);
+    while (inbound.length >= 3) {
+      const size = gt06.frameLength(inbound);
+      if (size <= 0 || inbound.length < size) break;
+      const frame = inbound.subarray(0, size);
+      inbound = inbound.subarray(size);
+      const parsed = gt06.parseFrame(frame);
+      if (parsed.ok && parsed.protocolNumber === 0x80) responderComando(parsed);
+    }
   });
+
+  function responderComando(parsed) {
+    const p = parsed.payload;
+    if (p.length < 7) return;
+    const commandLength = p[0];
+    const flag = p.readUInt32BE(1);
+    const textLength = Math.max(0, commandLength - 4);
+    const command = p.subarray(5, 5 + textLength).toString('ascii');
+    const response = /^(?:TIMER|HBT|SENALM|BATALM),/i.test(command)
+      ? 'SET OK!'
+      : command === 'PARAM#' ? 'IMEI:SIMULATED;TIMER:10;HBT:3;UTC:ON'
+      : command === 'STATUS#' ? 'Battery:80%;GPRS:Link Up;GPS:FIXED'
+      : 'ERROR!';
+    const responseText = Buffer.from(response, 'ascii');
+    const payload = Buffer.alloc(1 + 4 + responseText.length + 2);
+    payload[0] = 4 + responseText.length;
+    payload.writeUInt32BE(flag, 1);
+    responseText.copy(payload, 5);
+    payload.writeUInt16BE(2, 5 + responseText.length);
+    enviar(gt06.encodeFrame(gt06.PROTOCOL_STRING, payload, siguienteSerial()), `respuesta comando ${command}`);
+  }
 
   socket.on('error', (err) => console.error(`${etiqueta} error: ${err.message}`));
 
