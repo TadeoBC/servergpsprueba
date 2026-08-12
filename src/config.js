@@ -74,7 +74,7 @@ export const config = {
   tracking: {
     mapMatchEnabled: bool('MAP_MATCH_ENABLED', true),
     mapMatchUrl: str('MAP_MATCH_URL', 'https://router.project-osrm.org'),
-    mapMatchTimeoutMs: int('MAP_MATCH_TIMEOUT_MS', 5000),
+    mapMatchTimeoutMs: int('MAP_MATCH_TIMEOUT_MS', 8000),
     mapMatchMaxPoints: int('MAP_MATCH_MAX_POINTS', 400),
   },
 

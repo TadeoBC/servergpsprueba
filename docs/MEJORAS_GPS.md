@@ -97,6 +97,13 @@ Al cargar un recorrido, `Ajustar estela a calles` solicita
 3. consulta el servicio Match de OSRM en bloques pequeños;
 4. conserva como GPS filtrado únicamente los bloques que OSRM no pudo ajustar.
 
+El ajuste usa una tolerancia de 25 m alrededor de cada pulso y conserva también
+la coordenada proyectada sobre la calle para dibujar los puntos y las paradas.
+Si el servicio Match no encuentra una coincidencia, se intenta Route como
+segundo ajuste vial antes de recurrir a la coordenada GPS cruda. Los pulsos que
+llegan por WebSocket se reajustan automáticamente sin cambiar zoom ni centro;
+no se anexan temporalmente como una línea cruda fuera del camino.
+
 El ajuste tiene un límite total de tiempo y nunca impide mostrar el recorrido.
 El OSRM público es útil para pruebas; para una flotilla en producción se
 recomienda desplegar uno propio y configurar `MAP_MATCH_URL`.

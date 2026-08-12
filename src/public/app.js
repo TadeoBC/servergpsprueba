@@ -25,6 +25,8 @@ const estado = {
   vistaMovil: 'mapa',
   ws: null,
   reintentoWs: 1000,
+  recorridoRequestId: 0,
+  timerAjusteVivo: null,
   yaCentro: false,
 };
 
@@ -276,6 +278,10 @@ function tooltipVelocidad(device) {
   const p = device.last_position;
   return `<b>${esc(nombre(device))}</b><br>${num(p?.speed_kmh, 1, ' km/h')}` +
     (estaParado(p) ? '<br><span class="texto-parado">● Parado</span>' : '');
+}
+
+function coordenadaVisual(position) {
+  return [position.display_latitude ?? position.latitude, position.display_longitude ?? position.longitude];
 }
 
 function aplicarTooltipVelocidad(marker, device) {
@@ -531,7 +537,7 @@ function actualizarMarcador(device) {
     return;
   }
 
-  const latlng = [p.latitude, p.longitude];
+  const latlng = coordenadaVisual(p);
   let m = estado.marcadores.get(device.imei);
   if (m) {
     m.setLatLng(latlng);
@@ -730,12 +736,16 @@ function sincronizarEstela3d() {
   const stops = gruposParados(estado.posicionesRecorrido);
   const stopLines = stops.map((group) => ({
     type: 'Feature', properties: {},
-    geometry: { type: 'LineString', coordinates: group.map((p) => [Number(p.longitude), Number(p.latitude)]) },
+    geometry: { type: 'LineString', coordinates: group.map((p) => [
+      Number(p.display_longitude ?? p.longitude), Number(p.display_latitude ?? p.latitude),
+    ]) },
   }));
   const stopPoints = stops.map((group) => {
     const p = group.at(-1);
     return { type: 'Feature', properties: { pulses: p.stopped_pulses || group.length },
-      geometry: { type: 'Point', coordinates: [Number(p.longitude), Number(p.latitude)] } };
+      geometry: { type: 'Point', coordinates: [
+        Number(p.display_longitude ?? p.longitude), Number(p.display_latitude ?? p.latitude),
+      ] } };
   });
   const stopGeojson = { type: 'FeatureCollection', features: [...stopLines, ...stopPoints] };
   if (map3d.getSource('paradas')) map3d.getSource('paradas').setData(stopGeojson);
@@ -853,8 +863,9 @@ function inputAIso(valor) {
   return new Date(tentativa.getTime() - desfase).toISOString();
 }
 
-async function cargarRecorrido() {
+async function cargarRecorrido({ ajustarVista = true, silencioso = false } = {}) {
   const imei = estado.seleccionado;
+  const requestId = ++estado.recorridoRequestId;
   const info = document.getElementById('info-recorrido');
   if (!imei) {
     info.textContent = 'Selecciona primero un equipo.';
@@ -869,9 +880,10 @@ async function cargarRecorrido() {
   if (desde) params.set('desde', desde);
   if (hasta) params.set('hasta', hasta);
 
-  info.textContent = 'Cargando…';
+  if (!silencioso) info.textContent = 'Cargando…';
   try {
     const data = await api(`/api/devices/${encodeURIComponent(imei)}/positions?${params}`);
+    if (requestId !== estado.recorridoRequestId || imei !== estado.seleccionado) return;
     limpiarRecorrido();
 
     const puntos = data.positions
@@ -883,7 +895,18 @@ async function cargarRecorrido() {
       return;
     }
 
-    estado.posicionesRecorrido = puntos.map(([, , p]) => p);
+    const snapped = new Map((data.trace?.snapped_points ?? []).map((p) => [String(p.id), p]));
+    estado.posicionesRecorrido = puntos.map(([, , p]) => {
+      const road = snapped.get(String(p.id));
+      return road ? { ...p, display_latitude: road.latitude, display_longitude: road.longitude } : p;
+    });
+    const selected = estado.equipos.get(imei);
+    const lastRoad = selected?.last_position && snapped.get(String(selected.last_position.id));
+    if (selected?.last_position && lastRoad) {
+      selected.last_position.display_latitude = lastRoad.latitude;
+      selected.last_position.display_longitude = lastRoad.longitude;
+      actualizarMarcador(selected);
+    }
 
     const segmentos = data.trace?.segments?.some((segment) => segment.length >= 2)
       ? data.trace.segments
@@ -898,14 +921,15 @@ async function cargarRecorrido() {
     sincronizarEstela3d();
 
     estado.puntosRecorrido = L.layerGroup(
-      puntos.map(([lat, lon, p]) =>
-        L.circleMarker([lat, lon], { radius: 3, color: '#3fa7ff', fillOpacity: 0.9, weight: 1 }).bindPopup(
+      estado.posicionesRecorrido.map((p) =>
+        L.circleMarker(coordenadaVisual(p),
+          { radius: 3, color: '#3fa7ff', fillOpacity: 0.9, weight: 1 }).bindPopup(
           `${esc(fmtFecha(p.device_time ?? p.server_time))}<br>${num(p.speed_kmh, 1, ' km/h')} · ${p.satellites ?? '—'} sat`,
         ),
       ),
     ).addTo(mapa);
 
-    mapa.fitBounds(estado.recorrido.getBounds().pad(0.15));
+    if (ajustarVista) mapa.fitBounds(estado.recorrido.getBounds().pad(0.15));
     const calidad = data.trace
       ? data.trace.matched
         ? ` · ajustada a calles${data.trace.partial ? ' parcialmente' : ''}`
@@ -936,7 +960,9 @@ function renderParadasRecorrido() {
   if (estado.paradasRecorrido) mapa.removeLayer(estado.paradasRecorrido);
   const layers = [];
   for (const group of gruposParados(estado.posicionesRecorrido)) {
-    const coordinates = group.map((p) => [Number(p.latitude), Number(p.longitude)]);
+    const coordinates = group.map((p) => [
+      Number(p.display_latitude ?? p.latitude), Number(p.display_longitude ?? p.longitude),
+    ]);
     const last = group.at(-1);
     const detail = `<b>Parado</b><br>${last.stopped_pulses || group.length} pulsos<br>Desde ${esc(fmtFecha(last.stopped_since))}`;
     layers.push(L.polyline(coordinates, { color: '#f59e0b', weight: 7, opacity: .95 }).bindTooltip(detail));
@@ -944,6 +970,15 @@ function renderParadasRecorrido() {
       fillColor: '#f59e0b', fillOpacity: 1 }).bindTooltip(detail));
   }
   estado.paradasRecorrido = L.layerGroup(layers).addTo(mapa);
+}
+
+function programarAjusteRecorridoVivo() {
+  clearTimeout(estado.timerAjusteVivo);
+  estado.timerAjusteVivo = setTimeout(() => {
+    if (!estado.seleccionado || !estado.recorrido) return;
+    document.getElementById('hasta').value = fechaLocalAInput(new Date());
+    cargarRecorrido({ ajustarVista: false, silencioso: true });
+  }, 1200);
 }
 
 function limpiarRecorrido() {
@@ -1006,9 +1041,6 @@ function conectarWs() {
       actualizarMarcador(device);
       if (usable && estado.seleccionado === m.imei && estado.recorrido) {
         const coordinate = [m.position.latitude, m.position.longitude];
-        estado.recorrido.addLatLng(coordinate);
-        if (!estado.coordenadasRecorrido.length) estado.coordenadasRecorrido.push([]);
-        estado.coordenadasRecorrido.at(-1).push(coordinate);
         estado.posicionesRecorrido.push(m.position);
         if (estaParado(m.position)) {
           const count = Math.min(m.position.stopped_pulses || 3, estado.posicionesRecorrido.length);
@@ -1020,8 +1052,17 @@ function conectarWs() {
             point.stopped_since = stoppedSince;
           }
         }
-        renderParadasRecorrido();
-        sincronizarEstela3d();
+        if (document.getElementById('ajustar-calles').checked) {
+          // No agregamos el punto crudo a la estela: en breve se recarga ya
+          // proyectado sobre la red vial y se conserva el zoom del operador.
+          programarAjusteRecorridoVivo();
+        } else {
+          estado.recorrido.addLatLng(coordinate);
+          if (!estado.coordenadasRecorrido.length) estado.coordenadasRecorrido.push([]);
+          estado.coordenadasRecorrido.at(-1).push(coordinate);
+          renderParadasRecorrido();
+          sincronizarEstela3d();
+        }
       }
       renderLista();
       if (estado.seleccionado === m.imei) renderDetalle();
@@ -1127,7 +1168,7 @@ async function iniciar() {
   }, 60000);
 
   // ── eventos de la interfaz ──
-  document.getElementById('cargar-recorrido').addEventListener('click', cargarRecorrido);
+  document.getElementById('cargar-recorrido').addEventListener('click', () => cargarRecorrido());
   document.getElementById('tema-mapa').value = estado.temaMapa;
   document.getElementById('tema-mapa').addEventListener('change', (e) => cambiarTemaMapa(e.currentTarget.value));
   document.getElementById('seguir-gps').addEventListener('click', alternarSeguimiento);

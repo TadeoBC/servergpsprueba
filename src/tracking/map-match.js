@@ -84,15 +84,44 @@ function rawCoordinates(points) {
 
 async function matchChunk(points, { baseUrl, timeoutMs, fetchImpl }) {
   const coordinates = points.map((p) => `${p.longitude.toFixed(6)},${p.latitude.toFixed(6)}`).join(';');
+  const radiuses = points.map(() => '25').join(';');
+  const bearings = points.map((p) =>
+    Number(p.speed_kmh) >= 5 && Number.isFinite(Number(p.course)) ? `${Math.round(Number(p.course))},60` : '',
+  ).join(';');
   const url = `${baseUrl.replace(/\/$/, '')}/match/v1/driving/${coordinates}` +
-    '?geometries=geojson&overview=full&gaps=split&tidy=true';
+    `?geometries=geojson&overview=full&gaps=split&tidy=true&radiuses=${radiuses}` +
+    (bearings.replaceAll(';', '') ? `&bearings=${bearings}` : '');
   const response = await fetchImpl(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(timeoutMs) });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(`OSRM HTTP ${response.status}: ${data.message ?? data.code ?? 'respuesta inválida'}`);
   if (data.code !== 'Ok' || !Array.isArray(data.matchings)) throw new Error(`OSRM ${data.code ?? 'sin respuesta'}`);
-  return data.matchings
+  const segments = data.matchings
     .map((m) => (m.geometry?.coordinates ?? []).map(([lon, lat]) => [lat, lon]))
     .filter((segment) => segment.length >= 2);
+  const snappedPoints = points.flatMap((point, index) => {
+    const location = data.tracepoints?.[index]?.location;
+    return Array.isArray(location) ? [{ id: point.id, latitude: location[1], longitude: location[0] }] : [];
+  });
+  return { segments, snappedPoints };
+}
+
+/** Route es un segundo intento más permisivo: conserva la estela sobre la red vial. */
+async function routeChunk(points, { baseUrl, timeoutMs, fetchImpl }) {
+  const coordinates = points.map((p) => `${p.longitude.toFixed(6)},${p.latitude.toFixed(6)}`).join(';');
+  const url = `${baseUrl.replace(/\/$/, '')}/route/v1/driving/${coordinates}` +
+    '?geometries=geojson&overview=full&continue_straight=true';
+  const response = await fetchImpl(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(timeoutMs) });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.code !== 'Ok' || !data.routes?.[0]?.geometry?.coordinates) {
+    throw new Error(`OSRM route ${data.message ?? data.code ?? response.status}`);
+  }
+  return {
+    segments: [data.routes[0].geometry.coordinates.map(([lon, lat]) => [lat, lon])],
+    snappedPoints: points.flatMap((point, index) => {
+      const location = data.waypoints?.[index]?.location;
+      return Array.isArray(location) ? [{ id: point.id, latitude: location[1], longitude: location[0] }] : [];
+    }),
+  };
 }
 
 /**
@@ -117,6 +146,8 @@ export async function buildMatchedTrace(positions, {
   const segments = [];
   const errors = [];
   let matchedChunks = 0;
+  let routedChunks = 0;
+  const snappedPoints = new Map();
   const deadline = Date.now() + timeoutMs;
   // Secuencial a propósito: el servidor público de demostración no debe
   // recibir ráfagas paralelas desde nuestra aplicación.
@@ -129,23 +160,54 @@ export async function buildMatchedTrace(positions, {
       try {
         const remainingMs = deadline - Date.now();
         if (remainingMs < 100) throw new Error('tiempo total de ajuste agotado');
-        const chunkSegments = await matchChunk(chunk, { baseUrl, timeoutMs: remainingMs, fetchImpl });
-        if (!chunkSegments.length) throw new Error('OSRM no encontró segmentos viales');
-        segments.push(...chunkSegments);
+        const matched = await matchChunk(chunk, { baseUrl, timeoutMs: remainingMs, fetchImpl });
+        if (!matched.segments.length) throw new Error('OSRM no encontró segmentos viales');
+        segments.push(...matched.segments);
+        for (const point of matched.snappedPoints) snappedPoints.set(point.id, point);
         matchedChunks++;
       } catch (err) {
-        segments.push(rawCoordinates(chunk));
-        errors.push(err.message);
+        try {
+          const remainingMs = deadline - Date.now();
+          if (remainingMs < 100) throw new Error('tiempo total de ajuste agotado');
+          const routed = await routeChunk(chunk, { baseUrl, timeoutMs: remainingMs, fetchImpl });
+          segments.push(...routed.segments);
+          for (const point of routed.snappedPoints) snappedPoints.set(point.id, point);
+          routedChunks++;
+        } catch (routeError) {
+          segments.push(rawCoordinates(chunk));
+          errors.push(`${err.message}; ${routeError.message}`);
+        }
       }
     }
   }
   const coordinates = segments.flat();
+  // Los duplicados estacionarios que filterGpsTrace quitó deben heredar el
+  // ajuste del pulso cercano; así las paradas tampoco reaparecen fuera de vía.
+  for (const point of positions) {
+    if (snappedPoints.has(point.id) || !Number.isFinite(Number(point.latitude)) || !Number.isFinite(Number(point.longitude))) continue;
+    let nearest = null;
+    let nearestDistance = Infinity;
+    for (const candidate of filtered) {
+      const snapped = snappedPoints.get(candidate.id);
+      if (!snapped) continue;
+      const distance = distanceMeters(point, candidate);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearest = snapped;
+      }
+    }
+    if (nearest && nearestDistance <= 25) {
+      snappedPoints.set(point.id, { id: point.id, latitude: nearest.latitude, longitude: nearest.longitude });
+    }
+  }
   return {
     coordinates,
     segments,
-    matched: matchedChunks > 0,
-    partial: errors.length > 0 && matchedChunks > 0,
-    reason: matchedChunks > 0 ? undefined : 'fallback',
+    matched: matchedChunks > 0 || routedChunks > 0,
+    partial: errors.length > 0 && (matchedChunks > 0 || routedChunks > 0),
+    routed_fallback: routedChunks > 0,
+    snapped_points: [...snappedPoints.values()],
+    reason: matchedChunks > 0 || routedChunks > 0 ? undefined : 'fallback',
     error: errors.length ? errors[0] : undefined,
     input_points: filtered.length,
   };
