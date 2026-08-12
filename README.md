@@ -189,7 +189,7 @@ El canal remoto `0x80`, su cola y la lista permitida están en
 | POST | `/api/devices` | Sí | Agrega o restaura un equipo con `imei` de 15 dígitos y `alias`/`placa` opcionales. |
 | DELETE | `/api/devices/:imei` | Sí | Archiva y oculta el equipo sin borrar su historial. |
 | GET | `/api/devices/:imei/last` | Sí | Busca el equipo por IMEI y devuelve el equipo y su última posición; responde `404` si no existe. |
-| GET | `/api/devices/:imei/positions` | Sí | Devuelve el histórico del equipo. Admite `desde` y `hasta` en ISO 8601, `limit` —100 por defecto y máximo 5000— y `solo_validas=1`; responde en orden cronológico ascendente. |
+| GET | `/api/devices/:imei/positions` | Sí | Devuelve el histórico del equipo. Admite `desde` y `hasta` en ISO 8601, `limit` —100 por defecto y máximo 5000—, `solo_validas=1` y `ajustar_calles=1`; responde en orden cronológico ascendente. Con ajuste devuelve `trace.segments` y cae a GPS filtrado si OSRM no responde. |
 | GET | `/api/devices/:imei/debug` | Sí | Devuelve las últimas tramas decodificadas conservadas en memoria para ese IMEI. |
 | GET | `/api/debug/sin-identificar` | Sí | Devuelve las últimas tramas en memoria que no pudieron atribuirse a un equipo. |
 | POST | `/api/decode` | Sí | Limpia separadores de un campo JSON `hex`, valida longitud y tamaño, arma tramas completas y las decodifica sin modificar la base de datos. |

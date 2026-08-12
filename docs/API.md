@@ -17,14 +17,18 @@ pueden registrarla.
 - `GET /api/v1/devices/:imei/last`: equipo, telemetría persistida y última
   posición GPS válida.
 - `GET /api/v1/devices/:imei/positions`: recorrido en JSON.
-- `GET /api/v1/devices/:imei/route.geojson`: recorrido como `LineString`
-  GeoJSON, listo para Leaflet, Mapbox o Google Maps.
+- `GET /api/v1/devices/:imei/route.geojson`: recorrido como `LineString` o
+  `MultiLineString` GeoJSON, listo para Leaflet, Mapbox o Google Maps. Admite
+  `ajustar_calles=1`; las propiedades `matched_to_roads` y `partial_match`
+  describen si la estela fue ajustada total o parcialmente a la red vial.
 - `GET /api/v1/devices/:imei/events`: alarmas y cambios de estado.
 - `GET /api/v1/devices/:imei/commands`: estado de comandos remotos, sin revelar
   el texto ni el usuario que los solicitó.
 
 Los recorridos aceptan `desde`, `hasta` (ISO 8601), `limit` (máximo 5000) y
-`solo_validas=1`. Los eventos aceptan `desde` y `limit` (máximo 1000).
+`solo_validas=1`. La ruta GeoJSON también admite `ajustar_calles=1` y cae a la
+traza GPS filtrada si OSRM no responde. Los eventos aceptan `desde` y `limit`
+(máximo 1000).
 
 ```bash
 curl -H 'Authorization: Bearer atlyx_TU_CLAVE' \

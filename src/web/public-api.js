@@ -1,6 +1,8 @@
 import express from 'express';
+import { config } from '../config.js';
 import { requireApiKey } from './api-keys.js';
 import { getDeviceByImei, getLastPosition, listPositions, listEvents, listDeviceCommands } from '../db/repo.js';
+import { buildMatchedTrace } from '../tracking/map-match.js';
 
 export function buildPublicApiRouter() {
   const router = express.Router();
@@ -30,11 +32,30 @@ export function buildPublicApiRouter() {
       if (!device) return res.status(404).json({ error: 'equipo no encontrado' });
       const range = parseRange(req, res); if (!range) return;
       const positions = await listPositions(device.id, { ...range, soloValidas: true });
+      let trace = null;
+      if (req.query.ajustar_calles === '1') trace = await buildMatchedTrace(positions, {
+        enabled: config.tracking.mapMatchEnabled,
+        baseUrl: config.tracking.mapMatchUrl,
+        timeoutMs: config.tracking.mapMatchTimeoutMs,
+        maxPoints: config.tracking.mapMatchMaxPoints,
+      });
+      const segments = trace?.segments?.length
+        ? trace.segments.map((segment) => segment.map(([lat, lon]) => [lon, lat]))
+        : [positions.map((p) => [p.longitude, p.latitude])];
+      const usableSegments = segments.filter((segment) => segment.length >= 2);
+      if (!usableSegments.length && positions.length >= 2) {
+        usableSegments.push(positions.map((p) => [p.longitude, p.latitude]));
+      }
       const feature = positions.length === 0 ? [] : [{
-        type: 'Feature', properties: { imei: device.imei, alias: device.alias, points: positions.length },
+        type: 'Feature', properties: {
+          imei: device.imei, alias: device.alias, points: positions.length,
+          matched_to_roads: trace?.matched ?? false, partial_match: trace?.partial ?? false,
+        },
         geometry: positions.length === 1
           ? { type: 'Point', coordinates: [positions[0].longitude, positions[0].latitude] }
-          : { type: 'LineString', coordinates: positions.map((p) => [p.longitude, p.latitude]) },
+          : usableSegments.length === 1
+            ? { type: 'LineString', coordinates: usableSegments[0] }
+            : { type: 'MultiLineString', coordinates: usableSegments },
       }];
       res.json({ type: 'FeatureCollection', features: feature });
     } catch (err) { next(err); }

@@ -8,6 +8,7 @@
   <!-- Leaflet por CDN: sin paso de compilación. Si el VPS no tiene salida a
        internet, descarga estos dos archivos y sírvelos desde /public. -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -86,6 +87,7 @@
             <button class="btn primario" id="cargar-recorrido" type="button">Cargar recorrido</button>
             <button class="btn" id="limpiar-recorrido" type="button">Limpiar</button>
           </div>
+          <label class="check-fila"><input type="checkbox" id="ajustar-calles" checked /> Ajustar estela a calles</label>
           <div id="info-recorrido" class="vacio" style="padding:0"></div>
         </div>
       </section>
@@ -107,10 +109,25 @@
       </details>
     </aside>
 
-    <main id="mapa"></main>
+    <main id="area-mapas">
+      <div class="barra-mapa" aria-label="Controles de seguimiento">
+        <select id="tema-mapa" aria-label="Tema del mapa">
+          <option value="calles">Calles</option>
+          <option value="oscuro">Oscuro</option>
+          <option value="satelite">Satélite</option>
+        </select>
+        <button class="btn pequeno" id="seguir-gps" type="button" aria-pressed="false">◎ Seguir</button>
+        <button class="btn pequeno" id="vista-3d" type="button" aria-pressed="false">◩ Vista 3D</button>
+        <button class="btn pequeno" id="vista-mosaico" type="button" aria-pressed="false">▦ Mosaico</button>
+      </div>
+      <div id="mapa" class="superficie-mapa"></div>
+      <div id="mapa-3d" class="superficie-mapa" hidden></div>
+      <div id="mosaico" class="superficie-mapa mosaico" hidden></div>
+    </main>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

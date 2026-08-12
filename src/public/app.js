@@ -11,20 +11,54 @@ const estado = {
   marcadores: new Map(), // imei -> L.Marker
   recorrido: null, // L.Polyline
   puntosRecorrido: null, // L.LayerGroup
+  coordenadasRecorrido: [], // segmentos [[[lat, lon], ...], ...]
+  temaMapa: localStorage.getItem('atlyx_tema_mapa') || 'calles',
+  modoVista: '2d', // 2d | 3d | mosaico
+  siguiendo: false,
+  vigilados: cargarVigilados(),
+  mapasMosaico: new Map(), // imei -> { map, marker, tile }
+  mapa3d: null,
+  marcador3d: null,
   ws: null,
   reintentoWs: 1000,
   yaCentro: false,
 };
+
+function cargarVigilados() {
+  try {
+    const value = JSON.parse(localStorage.getItem('atlyx_gps_vigilados') || '[]');
+    return new Set(Array.isArray(value) ? value : []);
+  } catch {
+    return new Set();
+  }
+}
 
 // ── mapa ─────────────────────────────────────────────────────────────────────
 // Centro inicial: San Juan del Río, Querétaro. Se reencuadra en cuanto llega
 // la primera posición real.
 const mapa = L.map('mapa', { zoomControl: true, attributionControl: true }).setView([20.3897, -99.9961], 13);
 
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 19,
-  attribution: '&copy; colaboradores de OpenStreetMap',
-}).addTo(mapa);
+const TEMAS_MAPA = {
+  calles: {
+    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    options: { maxZoom: 19, attribution: '&copy; colaboradores de OpenStreetMap' },
+  },
+  oscuro: {
+    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    options: { maxZoom: 20, subdomains: 'abcd', attribution: '&copy; OpenStreetMap &copy; CARTO' },
+  },
+  satelite: {
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    options: { maxZoom: 19, attribution: 'Tiles &copy; Esri' },
+  },
+};
+
+let capaBase = crearCapaBase(estado.temaMapa).addTo(mapa);
+
+function crearCapaBase(tema) {
+  const def = TEMAS_MAPA[tema] ?? TEMAS_MAPA.calles;
+  return L.tileLayer(def.url, def.options);
+}
 
 // ── utilidades de formato ────────────────────────────────────────────────────
 // Todo se guarda en UTC; aquí y solo aquí se convierte a la zona de la interfaz.
@@ -132,12 +166,21 @@ function renderLista() {
           <div class="sub">${esc(desdeHace(ref))}${p && !p.valid ? ' · sin fix' : ''}</div>
         </div>
         <div class="vel">${p ? num(p.speed_kmh, 0, ' km/h') : '—'}</div>
+        <button class="vigilar ${estado.vigilados.has(d.imei) ? 'activo' : ''}" data-vigilar="${esc(d.imei)}"
+          type="button" title="${estado.vigilados.has(d.imei) ? 'Quitar del mosaico' : 'Agregar al mosaico'}"
+          aria-label="${estado.vigilados.has(d.imei) ? 'Quitar del mosaico' : 'Agregar al mosaico'}">${estado.vigilados.has(d.imei) ? '◉' : '◎'}</button>
       </div>`;
     })
     .join('');
 
   cont.querySelectorAll('.equipo').forEach((el) => {
     el.addEventListener('click', () => seleccionar(el.dataset.imei, true));
+  });
+  cont.querySelectorAll('[data-vigilar]').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      alternarVigilado(button.dataset.vigilar);
+    });
   });
 }
 
@@ -341,6 +384,12 @@ function actualizarMarcador(device) {
     `<b>${esc(nombre(device))}</b><br>${p.latitude.toFixed(6)}, ${p.longitude.toFixed(6)}<br>` +
       `${num(p.speed_kmh, 1, ' km/h')} · ${esc(fmtHora(p.device_time ?? p.server_time))}`,
   );
+
+  if (estado.siguiendo && estado.seleccionado === device.imei && estado.modoVista === '2d') {
+    mapa.panTo(latlng, { animate: true, duration: 0.8 });
+  }
+  actualizarGps3d(device);
+  actualizarGpsMosaico(device);
 }
 
 function encuadrarTodo() {
@@ -348,6 +397,188 @@ function encuadrarTodo() {
   if (puntos.length === 0) return;
   if (puntos.length === 1) mapa.setView(puntos[0], 15);
   else mapa.fitBounds(L.latLngBounds(puntos).pad(0.2));
+}
+
+function cambiarTemaMapa(tema) {
+  if (!TEMAS_MAPA[tema]) return;
+  estado.temaMapa = tema;
+  localStorage.setItem('atlyx_tema_mapa', tema);
+  if (capaBase) mapa.removeLayer(capaBase);
+  capaBase = crearCapaBase(tema).addTo(mapa);
+  capaBase.bringToBack?.();
+  for (const item of estado.mapasMosaico.values()) {
+    item.map.removeLayer(item.tile);
+    item.tile = crearCapaBase(tema).addTo(item.map);
+    item.tile.bringToBack?.();
+  }
+  if (estado.mapa3d) {
+    estado.mapa3d.setStyle(mapa3dStyle());
+    estado.mapa3d.once('style.load', () => sincronizarEstela3d());
+  }
+}
+
+function alternarSeguimiento() {
+  if (!estado.seleccionado) {
+    document.getElementById('info-recorrido').textContent = 'Selecciona un GPS para seguirlo.';
+    return;
+  }
+  estado.siguiendo = !estado.siguiendo;
+  const button = document.getElementById('seguir-gps');
+  button.classList.toggle('activo', estado.siguiendo);
+  button.setAttribute('aria-pressed', String(estado.siguiendo));
+  button.textContent = estado.siguiendo ? '◉ Siguiendo' : '◎ Seguir';
+  if (estado.siguiendo) centrarSeleccionado();
+}
+
+function centrarSeleccionado() {
+  const device = estado.equipos.get(estado.seleccionado);
+  const p = device?.last_position;
+  if (!p || p.latitude === null || p.longitude === null) return;
+  if (estado.modoVista === '3d' && estado.mapa3d) {
+    estado.mapa3d.easeTo({ center: [p.longitude, p.latitude], zoom: Math.max(estado.mapa3d.getZoom(), 17),
+      bearing: p.course ?? estado.mapa3d.getBearing(), pitch: 67, duration: 900 });
+  } else if (estado.modoVista === '2d') {
+    mapa.setView([p.latitude, p.longitude], Math.max(mapa.getZoom(), 16), { animate: true });
+  }
+}
+
+function alternarVigilado(imei) {
+  if (estado.vigilados.has(imei)) estado.vigilados.delete(imei);
+  else estado.vigilados.add(imei);
+  localStorage.setItem('atlyx_gps_vigilados', JSON.stringify([...estado.vigilados]));
+  renderLista();
+  if (estado.modoVista === 'mosaico') renderMosaico();
+}
+
+function destruirMosaico() {
+  for (const item of estado.mapasMosaico.values()) item.map.remove();
+  estado.mapasMosaico.clear();
+  document.getElementById('mosaico').replaceChildren();
+}
+
+function renderMosaico() {
+  destruirMosaico();
+  const container = document.getElementById('mosaico');
+  const devices = [...estado.vigilados].map((imei) => estado.equipos.get(imei)).filter(Boolean);
+  if (devices.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'mosaico-vacio';
+    empty.innerHTML = '<div><b>Selecciona los GPS que quieres vigilar</b><br>Usa el botón ◎ junto a cada equipo.</div>';
+    container.append(empty);
+    return;
+  }
+  for (const device of devices) {
+    const card = document.createElement('article');
+    card.className = 'mosaico-tarjeta';
+    const mapElement = document.createElement('div');
+    mapElement.className = 'mosaico-mapa';
+    const label = document.createElement('div');
+    label.className = 'mosaico-etiqueta';
+    label.innerHTML = `<span><b>${esc(nombre(device))}</b></span><span>${num(device.last_position?.speed_kmh, 0, ' km/h')}</span>`;
+    card.append(mapElement, label);
+    container.append(card);
+    const p = device.last_position;
+    const center = p && p.latitude !== null ? [p.latitude, p.longitude] : [20.3897, -99.9961];
+    const miniMap = L.map(mapElement, { zoomControl: false, attributionControl: false, dragging: true }).setView(center, p ? 16 : 12);
+    const tile = crearCapaBase(estado.temaMapa).addTo(miniMap);
+    let marker = null;
+    if (p && p.latitude !== null) marker = L.marker(center, { icon: iconoMarcador(device) }).addTo(miniMap);
+    estado.mapasMosaico.set(device.imei, { map: miniMap, marker, tile, label });
+  }
+}
+
+function actualizarGpsMosaico(device) {
+  const item = estado.mapasMosaico.get(device.imei);
+  const p = device.last_position;
+  if (!item || !p || p.latitude === null) return;
+  const latlng = [p.latitude, p.longitude];
+  if (item.marker) {
+    item.marker.setLatLng(latlng).setIcon(iconoMarcador(device));
+  } else {
+    item.marker = L.marker(latlng, { icon: iconoMarcador(device) }).addTo(item.map);
+  }
+  item.map.panTo(latlng, { animate: true, duration: 0.8 });
+  item.label.lastElementChild.textContent = num(p.speed_kmh, 0, ' km/h');
+}
+
+function mapa3dStyle() {
+  const def = TEMAS_MAPA[estado.temaMapa] ?? TEMAS_MAPA.calles;
+  return {
+    version: 8,
+    sources: {
+      base: { type: 'raster', tiles: [def.url.replace('{s}', 'a').replace('{r}', '')], tileSize: 256,
+        maxzoom: def.options.maxZoom, attribution: def.options.attribution },
+      terrain: { type: 'raster-dem', url: 'https://tiles.mapterhorn.com/tilejson.json', tileSize: 256 },
+    },
+    layers: [{ id: 'base', type: 'raster', source: 'base' }],
+    terrain: { source: 'terrain', exaggeration: 1.15 },
+    sky: {},
+  };
+}
+
+function asegurarMapa3d() {
+  if (estado.mapa3d || !window.maplibregl) return;
+  estado.mapa3d = new maplibregl.Map({
+    container: 'mapa-3d', style: mapa3dStyle(), center: [-99.9961, 20.3897], zoom: 16,
+    pitch: 67, bearing: 0, maxPitch: 85, attributionControl: true,
+  });
+  estado.mapa3d.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'bottom-right');
+  estado.mapa3d.on('load', () => {
+    sincronizarEstela3d();
+    actualizarGps3d(estado.equipos.get(estado.seleccionado));
+  });
+}
+
+function sincronizarEstela3d() {
+  const map3d = estado.mapa3d;
+  if (!map3d?.isStyleLoaded()) return;
+  const coordinates = estado.coordenadasRecorrido
+    .filter((segment) => segment.length >= 2)
+    .map((segment) => segment.map(([lat, lon]) => [lon, lat]));
+  const geojson = coordinates.length
+    ? { type: 'Feature', properties: {}, geometry: { type: 'MultiLineString', coordinates } }
+    : { type: 'FeatureCollection', features: [] };
+  if (map3d.getSource('estela')) map3d.getSource('estela').setData(geojson);
+  else {
+    map3d.addSource('estela', { type: 'geojson', data: geojson });
+    map3d.addLayer({ id: 'estela-halo', type: 'line', source: 'estela', paint: { 'line-color': '#06121f', 'line-width': 8, 'line-opacity': .65 } });
+    map3d.addLayer({ id: 'estela-linea', type: 'line', source: 'estela', paint: { 'line-color': '#3fa7ff', 'line-width': 4 } });
+  }
+}
+
+function actualizarGps3d(device) {
+  if (!device || estado.modoVista !== '3d' || !estado.mapa3d) return;
+  const p = device.last_position;
+  if (!p || p.latitude === null) return;
+  const lngLat = [p.longitude, p.latitude];
+  if (!estado.marcador3d) {
+    const el = document.createElement('div');
+    el.className = 'marcador-3d';
+    estado.marcador3d = new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(estado.mapa3d);
+  } else estado.marcador3d.setLngLat(lngLat);
+  if (estado.siguiendo) estado.mapa3d.easeTo({ center: lngLat, zoom: Math.max(estado.mapa3d.getZoom(), 17),
+    bearing: p.course ?? estado.mapa3d.getBearing(), pitch: 67, duration: 900 });
+}
+
+function cambiarModoVista(mode) {
+  if (mode === '3d' && !window.maplibregl) {
+    document.getElementById('info-recorrido').textContent = 'La vista 3D no pudo cargar. Se mantiene el mapa 2D.';
+    mode = '2d';
+  }
+  estado.modoVista = mode;
+  document.getElementById('mapa').hidden = mode !== '2d';
+  document.getElementById('mapa-3d').hidden = mode !== '3d';
+  document.getElementById('mosaico').hidden = mode !== 'mosaico';
+  document.getElementById('vista-3d').classList.toggle('activo', mode === '3d');
+  document.getElementById('vista-mosaico').classList.toggle('activo', mode === 'mosaico');
+  document.getElementById('vista-3d').setAttribute('aria-pressed', String(mode === '3d'));
+  document.getElementById('vista-mosaico').setAttribute('aria-pressed', String(mode === 'mosaico'));
+  if (mode === '2d') setTimeout(() => { mapa.invalidateSize(); centrarSeleccionado(); }, 0);
+  if (mode === '3d') {
+    asegurarMapa3d();
+    setTimeout(() => { estado.mapa3d?.resize(); centrarSeleccionado(); }, 0);
+  }
+  if (mode === 'mosaico') renderMosaico();
 }
 
 // ── selección ────────────────────────────────────────────────────────────────
@@ -359,6 +590,15 @@ async function seleccionar(imei, centrar) {
 
   const m = estado.marcadores.get(imei);
   if (centrar && m) mapa.setView(m.getLatLng(), Math.max(mapa.getZoom(), 15));
+  const selectedDevice = estado.equipos.get(imei);
+  if (estado.modoVista === '3d') {
+    actualizarGps3d(selectedDevice);
+    if (centrar && selectedDevice?.last_position && estado.mapa3d) {
+      estado.mapa3d.easeTo({ center: [selectedDevice.last_position.longitude, selectedDevice.last_position.latitude],
+        zoom: Math.max(estado.mapa3d.getZoom(), 17), pitch: 67, duration: 700 });
+    }
+  }
+  if (estado.siguiendo) centrarSeleccionado();
 
   // Traemos los paquetes de depuración de este equipo (los que ya estaban en
   // memoria del servidor antes de que abriéramos la interfaz).
@@ -416,6 +656,7 @@ async function cargarRecorrido() {
   const hasta = inputAIso(document.getElementById('hasta').value);
 
   const params = new URLSearchParams({ limit: '5000', solo_validas: '1' });
+  if (document.getElementById('ajustar-calles').checked) params.set('ajustar_calles', '1');
   if (desde) params.set('desde', desde);
   if (hasta) params.set('hasta', hasta);
 
@@ -433,11 +674,16 @@ async function cargarRecorrido() {
       return;
     }
 
-    estado.recorrido = L.polyline(puntos.map((p) => [p[0], p[1]]), {
+    const segmentos = data.trace?.segments?.some((segment) => segment.length >= 2)
+      ? data.trace.segments
+      : [puntos.map((p) => [p[0], p[1]])];
+    estado.coordenadasRecorrido = segmentos;
+    estado.recorrido = L.polyline(segmentos, {
       color: '#3fa7ff',
       weight: 3,
       opacity: 0.85,
     }).addTo(mapa);
+    sincronizarEstela3d();
 
     estado.puntosRecorrido = L.layerGroup(
       puntos.map(([lat, lon, p]) =>
@@ -448,7 +694,12 @@ async function cargarRecorrido() {
     ).addTo(mapa);
 
     mapa.fitBounds(estado.recorrido.getBounds().pad(0.15));
-    info.innerHTML = `${puntos.length} punto(s) · ${esc(fmtFecha(data.positions[0].device_time ?? data.positions[0].server_time))} → ${esc(fmtFecha(data.positions.at(-1).device_time ?? data.positions.at(-1).server_time))}`;
+    const calidad = data.trace
+      ? data.trace.matched
+        ? ` · ajustada a calles${data.trace.partial ? ' parcialmente' : ''}`
+        : ` · GPS filtrado${data.trace.error ? ' (ajuste no disponible)' : ''}`
+      : '';
+    info.innerHTML = `${puntos.length} punto(s)${calidad} · ${esc(fmtFecha(data.positions[0].device_time ?? data.positions[0].server_time))} → ${esc(fmtFecha(data.positions.at(-1).device_time ?? data.positions.at(-1).server_time))}`;
   } catch (err) {
     info.textContent = 'Error: ' + err.message;
   }
@@ -463,6 +714,8 @@ function limpiarRecorrido() {
     mapa.removeLayer(estado.puntosRecorrido);
     estado.puntosRecorrido = null;
   }
+  estado.coordenadasRecorrido = [];
+  sincronizarEstela3d();
 }
 
 // ── WebSocket ────────────────────────────────────────────────────────────────
@@ -505,7 +758,13 @@ function conectarWs() {
       device.last_seen_at = m.position?.server_time ?? new Date().toISOString();
       estado.equipos.set(m.imei, device);
       actualizarMarcador(device);
-      if (usable && estado.seleccionado === m.imei && estado.recorrido) estado.recorrido.addLatLng([m.position.latitude, m.position.longitude]);
+      if (usable && estado.seleccionado === m.imei && estado.recorrido) {
+        const coordinate = [m.position.latitude, m.position.longitude];
+        estado.recorrido.addLatLng(coordinate);
+        if (!estado.coordenadasRecorrido.length) estado.coordenadasRecorrido.push([]);
+        estado.coordenadasRecorrido.at(-1).push(coordinate);
+        sincronizarEstela3d();
+      }
       renderLista();
       if (estado.seleccionado === m.imei) renderDetalle();
       if (!estado.yaCentro) {
@@ -610,6 +869,14 @@ async function iniciar() {
 
   // ── eventos de la interfaz ──
   document.getElementById('cargar-recorrido').addEventListener('click', cargarRecorrido);
+  document.getElementById('tema-mapa').value = estado.temaMapa;
+  document.getElementById('tema-mapa').addEventListener('change', (e) => cambiarTemaMapa(e.currentTarget.value));
+  document.getElementById('seguir-gps').addEventListener('click', alternarSeguimiento);
+  document.getElementById('vista-3d').addEventListener('click', () => cambiarModoVista(estado.modoVista === '3d' ? '2d' : '3d'));
+  document.getElementById('vista-mosaico').addEventListener('click', () => cambiarModoVista(estado.modoVista === 'mosaico' ? '2d' : 'mosaico'));
+  document.getElementById('ajustar-calles').addEventListener('change', () => {
+    if (estado.seleccionado) cargarRecorrido();
+  });
   document.getElementById('limpiar-recorrido').addEventListener('click', () => {
     limpiarRecorrido();
     document.getElementById('info-recorrido').textContent = '';
@@ -701,10 +968,15 @@ async function quitarEquipo() {
     estado.marcadores.delete(imei);
     estado.equipos.delete(imei);
     estado.seleccionado = null;
+    if (estado.marcador3d) {
+      estado.marcador3d.remove();
+      estado.marcador3d = null;
+    }
     limpiarRecorrido();
     renderLista();
     renderDetalle();
     renderDepuracion();
+    if (estado.modoVista === 'mosaico') renderMosaico();
     document.getElementById('info-equipo').textContent = data.message;
   } catch (err) {
     info.textContent = 'Error: ' + err.message;

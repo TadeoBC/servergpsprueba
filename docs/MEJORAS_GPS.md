@@ -60,3 +60,22 @@ docker compose logs -f app
 Verifica `/api/health`, el marcador, batería, una ruta y luego genera la clave
 API. Antes de usar alarmas con modo SMS/llamada, configura y comprueba el número
 central del dispositivo según el proveedor de la SIM.
+## Seguimiento avanzado y mapas
+
+La barra superior del mapa permite cambiar entre tres fondos (`Calles`,
+`Oscuro` y `Satélite`), mantener centrado el equipo seleccionado con `Seguir`,
+activar una perspectiva aérea 3D con terreno y abrir un mosaico de varios GPS.
+Los equipos del mosaico se eligen con el botón `◎` de cada renglón; la selección
+y el tema quedan guardados en el navegador.
+
+Al cargar un recorrido, `Ajustar estela a calles` solicita
+`ajustar_calles=1`. El servidor:
+
+1. elimina duplicados menores a un metro y saltos físicamente imposibles;
+2. separa periodos de más de diez minutos sin señal;
+3. consulta el servicio Match de OSRM en bloques pequeños;
+4. conserva como GPS filtrado únicamente los bloques que OSRM no pudo ajustar.
+
+El ajuste tiene un límite total de tiempo y nunca impide mostrar el recorrido.
+El OSRM público es útil para pruebas; para una flotilla en producción se
+recomienda desplegar uno propio y configurar `MAP_MATCH_URL`.

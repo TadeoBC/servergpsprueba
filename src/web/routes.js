@@ -18,6 +18,7 @@ import { buildAllowedCommand, COMMAND_CATALOG, CommandValidationError } from '..
 import { queueDeviceCommand, isDeviceOnline } from '../commands/dispatcher.js';
 import { getPackets, getUnidentifiedPackets } from '../ingest/bus.js';
 import { decodeFrame, FrameAccumulator } from '../tcp/framing.js';
+import { buildMatchedTrace } from '../tracking/map-match.js';
 import {
   checkCredentials,
   createSessionToken,
@@ -167,7 +168,16 @@ export function buildApiRouter() {
         limit,
         soloValidas: req.query.solo_validas === '1',
       });
-      res.json({ device, positions, limit });
+      let trace = null;
+      if (req.query.ajustar_calles === '1') {
+        trace = await buildMatchedTrace(positions, {
+          enabled: config.tracking.mapMatchEnabled,
+          baseUrl: config.tracking.mapMatchUrl,
+          timeoutMs: config.tracking.mapMatchTimeoutMs,
+          maxPoints: config.tracking.mapMatchMaxPoints,
+        });
+      }
+      res.json({ device, positions, limit, trace });
     } catch (err) {
       next(err);
     }

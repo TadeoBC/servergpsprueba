@@ -71,6 +71,13 @@ export const config = {
     amberMinutes: int('STATUS_AMBER_MINUTES', 30),
   },
 
+  tracking: {
+    mapMatchEnabled: bool('MAP_MATCH_ENABLED', true),
+    mapMatchUrl: str('MAP_MATCH_URL', 'https://router.project-osrm.org'),
+    mapMatchTimeoutMs: int('MAP_MATCH_TIMEOUT_MS', 5000),
+    mapMatchMaxPoints: int('MAP_MATCH_MAX_POINTS', 400),
+  },
+
   log: {
     level: str('LOG_LEVEL', 'info'),
     pretty: bool('LOG_PRETTY', false),
