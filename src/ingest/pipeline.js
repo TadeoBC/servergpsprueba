@@ -3,7 +3,7 @@ import { logger } from '../logger.js';
 import {
   getOrCreateDevice, resolveDeviceByTerminalId, touchDevice, insertPosition,
   insertEvent, updateDeviceTelemetry, evaluateSpeedAlert,
-  resolveDeviceCommand,
+  resolveDeviceCommand, getCurrentMovementState,
 } from '../db/repo.js';
 import { bus, recordPacket } from './bus.js';
 
@@ -186,6 +186,11 @@ async function savePosition(device, position, decoded, attributes) {
     );
     return null;
   }
+
+  Object.assign(fila, await getCurrentMovementState(device.id).catch((err) => {
+    logger.error({ err: err.message, imei: device.imei }, 'no se pudo calcular el estado de movimiento');
+    return { movement_state: 'moving', stopped_pulses: 0, stopped_since: null };
+  }));
 
   logger.info(
     {

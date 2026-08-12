@@ -282,6 +282,11 @@ table.campos tr.derivado td { color: var(--texto-2); font-style: italic; }
   box-shadow: 0 0 0 2px currentColor, 0 2px 6px rgba(0,0,0,.6);
   background: currentColor;
 }
+.marcador.parado .cuerpo {
+  color: #f59e0b;
+  background: #f59e0b;
+  box-shadow: 0 0 0 3px rgba(245,158,11,.4), 0 2px 7px rgba(0,0,0,.7);
+}
 .marcador .flecha {
   position: absolute;
   width: 0; height: 0;
@@ -304,6 +309,12 @@ table.campos tr.derivado td { color: var(--texto-2); font-style: italic; }
 }
 .leaflet-container { background: #0b0e13; font: inherit; }
 .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--panel); color: var(--texto); }
+.leaflet-tooltip.tooltip-velocidad {
+  background: rgba(11,14,19,.94); color: var(--texto); border:1px solid var(--borde);
+  border-radius:7px; box-shadow:0 4px 14px rgba(0,0,0,.45); text-align:center;
+}
+.leaflet-tooltip.tooltip-velocidad::before { border-top-color:var(--borde); }
+.texto-parado { color:#f59e0b; font-weight:700; }
 .leaflet-bar a { background: var(--panel); color: var(--texto); border-color: var(--borde); }
 .leaflet-bar a:hover { background: var(--panel-2); }
 
@@ -331,6 +342,7 @@ table.campos tr.derivado td { color: var(--texto-2); font-style: italic; }
 .maplibregl-ctrl-group { background:var(--panel); }
 .maplibregl-ctrl button .maplibregl-ctrl-icon { filter:invert(.85); }
 .marcador-3d { width:18px; height:18px; border-radius:50%; background:var(--acento); border:3px solid white; box-shadow:0 0 0 5px rgba(63,167,255,.25), 0 3px 10px #000; }
+.marcador-3d.parado { background:#f59e0b; box-shadow:0 0 0 6px rgba(245,158,11,.3), 0 3px 10px #000; }
 
 /* ── login ─────────────────────────────────────────────────────────────────── */
 .login-caja {

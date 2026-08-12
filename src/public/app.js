@@ -11,6 +11,8 @@ const estado = {
   marcadores: new Map(), // imei -> L.Marker
   recorrido: null, // L.Polyline
   puntosRecorrido: null, // L.LayerGroup
+  paradasRecorrido: null, // L.LayerGroup con tramos naranjas
+  posicionesRecorrido: [], // posiciones crudas, incluidas las estacionarias
   coordenadasRecorrido: [], // segmentos [[[lat, lon], ...], ...]
   temaMapa: cargarTemaMapa(),
   modoVista: '2d', // 2d | 3d | mosaico
@@ -19,6 +21,7 @@ const estado = {
   mapasMosaico: new Map(), // imei -> { map, marker, tile }
   mapa3d: null,
   marcador3d: null,
+  popup3d: null,
   vistaMovil: 'mapa',
   ws: null,
   reintentoWs: 1000,
@@ -261,6 +264,26 @@ function num(v, dec = 0, sufijo = '') {
   return Number(v).toFixed(dec) + sufijo;
 }
 
+function estaParado(position) {
+  return position?.movement_state === 'stopped';
+}
+
+function textoMovimiento(position) {
+  return estaParado(position) ? 'Parado' : 'En movimiento';
+}
+
+function tooltipVelocidad(device) {
+  const p = device.last_position;
+  return `<b>${esc(nombre(device))}</b><br>${num(p?.speed_kmh, 1, ' km/h')}` +
+    (estaParado(p) ? '<br><span class="texto-parado">● Parado</span>' : '');
+}
+
+function aplicarTooltipVelocidad(marker, device) {
+  const content = tooltipVelocidad(device);
+  if (marker.getTooltip?.()) marker.setTooltipContent(content);
+  else marker.bindTooltip(content, { direction: 'top', offset: [0, -16], sticky: true, className: 'tooltip-velocidad' });
+}
+
 // ── API ──────────────────────────────────────────────────────────────────────
 async function api(ruta, opciones) {
   const res = await fetch(ruta, { credentials: 'same-origin', ...opciones });
@@ -298,7 +321,7 @@ function renderLista() {
         <span class="punto ${claseEstado(d)}"></span>
         <div class="datos">
           <div class="nombre">${esc(nombre(d))}${d.activo ? '' : '<span class="inactivo-tag">sin activar</span>'}</div>
-          <div class="sub">${esc(desdeHace(ref))}${p && !p.valid ? ' · sin fix' : ''}</div>
+          <div class="sub">${esc(desdeHace(ref))}${p && !p.valid ? ' · sin fix' : ''}${estaParado(p) ? ' · <span class="texto-parado">parado</span>' : ''}</div>
         </div>
         <div class="vel">${p ? num(p.speed_kmh, 0, ' km/h') : '—'}</div>
         <button class="vigilar ${estado.vigilados.has(d.imei) ? 'activo' : ''}" data-vigilar="${esc(d.imei)}"
@@ -348,6 +371,9 @@ function renderDetalle() {
       ['Última posición válida', `${esc(fmtFecha(p.device_time ?? p.server_time))}<br><span style="color:var(--texto-2)">${esc(desdeHace(p.device_time ?? p.server_time))}</span>`],
       ['Coordenadas', p.latitude !== null ? `${p.latitude.toFixed(6)}, ${p.longitude.toFixed(6)}` : '<span style="color:var(--ambar)">sin fix</span>'],
       ['Velocidad', num(p.speed_kmh, 1, ' km/h')],
+      ['Movimiento', estaParado(p)
+        ? `<span class="texto-parado">● Parado (${p.stopped_pulses || '3+'} pulsos)</span>`
+        : '<span style="color:var(--verde)">● En movimiento</span>'],
       ['Rumbo', p.course === null ? '—' : num(p.course, 0, '°')],
       ['Satélites', p.satellites ?? '—'],
       ['Altitud', p.altitude === null ? '—' : num(p.altitude, 0, ' m')],
@@ -483,7 +509,7 @@ function iconoMarcador(device) {
     : `<i class="flecha" style="transform: rotate(${rumbo}deg) translateY(-17px)"></i>`;
   return L.divIcon({
     className: '',
-    html: `<div class="marcador" style="color:${color};position:relative">
+    html: `<div class="marcador ${estaParado(p) ? 'parado' : ''}" style="color:${color};position:relative">
              ${flecha}<span class="cuerpo"></span>
              <span class="etiqueta">${esc(nombre(device))}</span>
            </div>`,
@@ -517,8 +543,9 @@ function actualizarMarcador(device) {
   }
   m.bindPopup(
     `<b>${esc(nombre(device))}</b><br>${p.latitude.toFixed(6)}, ${p.longitude.toFixed(6)}<br>` +
-      `${num(p.speed_kmh, 1, ' km/h')} · ${esc(fmtHora(p.device_time ?? p.server_time))}`,
+      `${num(p.speed_kmh, 1, ' km/h')} · ${esc(fmtHora(p.device_time ?? p.server_time))}<br>${esc(textoMovimiento(p))}`,
   );
+  aplicarTooltipVelocidad(m, device);
 
   if (estado.siguiendo && estado.seleccionado === device.imei && estado.modoVista === '2d') {
     mapa.panTo(latlng, { animate: true, duration: 0.8 });
@@ -620,7 +647,10 @@ function renderMosaico() {
     const miniMap = L.map(mapElement, { zoomControl: false, attributionControl: false, dragging: true }).setView(center, p ? 16 : 12);
     const tile = crearCapaBase(estado.temaMapa).addTo(miniMap);
     let marker = null;
-    if (p && p.latitude !== null) marker = L.marker(center, { icon: iconoMarcador(device) }).addTo(miniMap);
+    if (p && p.latitude !== null) {
+      marker = L.marker(center, { icon: iconoMarcador(device) }).addTo(miniMap);
+      aplicarTooltipVelocidad(marker, device);
+    }
     estado.mapasMosaico.set(device.imei, { map: miniMap, marker, tile, label });
   }
 }
@@ -635,6 +665,7 @@ function actualizarGpsMosaico(device) {
   } else {
     item.marker = L.marker(latlng, { icon: iconoMarcador(device) }).addTo(item.map);
   }
+  aplicarTooltipVelocidad(item.marker, device);
   item.map.panTo(latlng, { animate: true, duration: 0.8 });
   item.label.lastElementChild.textContent = num(p.speed_kmh, 0, ' km/h');
 }
@@ -695,6 +726,26 @@ function sincronizarEstela3d() {
     map3d.addLayer({ id: 'estela-halo', type: 'line', source: 'estela', paint: { 'line-color': '#06121f', 'line-width': 8, 'line-opacity': .65 } });
     map3d.addLayer({ id: 'estela-linea', type: 'line', source: 'estela', paint: { 'line-color': '#3fa7ff', 'line-width': 4 } });
   }
+
+  const stops = gruposParados(estado.posicionesRecorrido);
+  const stopLines = stops.map((group) => ({
+    type: 'Feature', properties: {},
+    geometry: { type: 'LineString', coordinates: group.map((p) => [Number(p.longitude), Number(p.latitude)]) },
+  }));
+  const stopPoints = stops.map((group) => {
+    const p = group.at(-1);
+    return { type: 'Feature', properties: { pulses: p.stopped_pulses || group.length },
+      geometry: { type: 'Point', coordinates: [Number(p.longitude), Number(p.latitude)] } };
+  });
+  const stopGeojson = { type: 'FeatureCollection', features: [...stopLines, ...stopPoints] };
+  if (map3d.getSource('paradas')) map3d.getSource('paradas').setData(stopGeojson);
+  else {
+    map3d.addSource('paradas', { type: 'geojson', data: stopGeojson });
+    map3d.addLayer({ id: 'paradas-linea', type: 'line', source: 'paradas', filter: ['==', '$type', 'LineString'],
+      paint: { 'line-color': '#f59e0b', 'line-width': 7, 'line-opacity': .95 } });
+    map3d.addLayer({ id: 'paradas-punto', type: 'circle', source: 'paradas', filter: ['==', '$type', 'Point'],
+      paint: { 'circle-color': '#f59e0b', 'circle-radius': 7, 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 } });
+  }
 }
 
 function actualizarGps3d(device) {
@@ -705,8 +756,14 @@ function actualizarGps3d(device) {
   if (!estado.marcador3d) {
     const el = document.createElement('div');
     el.className = 'marcador-3d';
-    estado.marcador3d = new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(estado.mapa3d);
+    estado.popup3d = new maplibregl.Popup({ offset: 18, closeButton: false });
+    estado.marcador3d = new maplibregl.Marker({ element: el }).setLngLat(lngLat)
+      .setPopup(estado.popup3d).addTo(estado.mapa3d);
   } else estado.marcador3d.setLngLat(lngLat);
+  estado.popup3d?.setHTML(tooltipVelocidad(device));
+  const element = estado.marcador3d.getElement();
+  element.classList.toggle('parado', estaParado(p));
+  element.title = `${nombre(device)} · ${num(p.speed_kmh, 1, ' km/h')} · ${textoMovimiento(p)}`;
   if (estado.siguiendo) estado.mapa3d.easeTo({ center: lngLat, zoom: Math.max(estado.mapa3d.getZoom(), 17),
     bearing: p.course ?? estado.mapa3d.getBearing(), pitch: 67, duration: 900 });
 }
@@ -826,6 +883,8 @@ async function cargarRecorrido() {
       return;
     }
 
+    estado.posicionesRecorrido = puntos.map(([, , p]) => p);
+
     const segmentos = data.trace?.segments?.some((segment) => segment.length >= 2)
       ? data.trace.segments
       : [puntos.map((p) => [p[0], p[1]])];
@@ -835,6 +894,7 @@ async function cargarRecorrido() {
       weight: 3,
       opacity: 0.85,
     }).addTo(mapa);
+    renderParadasRecorrido();
     sincronizarEstela3d();
 
     estado.puntosRecorrido = L.layerGroup(
@@ -851,10 +911,39 @@ async function cargarRecorrido() {
         ? ` · ajustada a calles${data.trace.partial ? ' parcialmente' : ''}`
         : ` · GPS filtrado${data.trace.error ? ' (ajuste no disponible)' : ''}`
       : '';
-    info.innerHTML = `${puntos.length} punto(s)${calidad} · ${esc(fmtFecha(data.positions[0].device_time ?? data.positions[0].server_time))} → ${esc(fmtFecha(data.positions.at(-1).device_time ?? data.positions.at(-1).server_time))}`;
+    const paradas = gruposParados(estado.posicionesRecorrido).length;
+    info.innerHTML = `${puntos.length} punto(s)${paradas ? ` · <span class="texto-parado">${paradas} parada(s)</span>` : ''}${calidad} · ${esc(fmtFecha(data.positions[0].device_time ?? data.positions[0].server_time))} → ${esc(fmtFecha(data.positions.at(-1).device_time ?? data.positions.at(-1).server_time))}`;
   } catch (err) {
     info.textContent = 'Error: ' + err.message;
   }
+}
+
+function gruposParados(positions) {
+  const groups = [];
+  let current = [];
+  for (const p of positions) {
+    if (estaParado(p) && Number.isFinite(Number(p.latitude)) && Number.isFinite(Number(p.longitude))) current.push(p);
+    else if (current.length) {
+      groups.push(current);
+      current = [];
+    }
+  }
+  if (current.length) groups.push(current);
+  return groups;
+}
+
+function renderParadasRecorrido() {
+  if (estado.paradasRecorrido) mapa.removeLayer(estado.paradasRecorrido);
+  const layers = [];
+  for (const group of gruposParados(estado.posicionesRecorrido)) {
+    const coordinates = group.map((p) => [Number(p.latitude), Number(p.longitude)]);
+    const last = group.at(-1);
+    const detail = `<b>Parado</b><br>${last.stopped_pulses || group.length} pulsos<br>Desde ${esc(fmtFecha(last.stopped_since))}`;
+    layers.push(L.polyline(coordinates, { color: '#f59e0b', weight: 7, opacity: .95 }).bindTooltip(detail));
+    layers.push(L.circleMarker(coordinates.at(-1), { radius: 7, color: '#fff', weight: 2,
+      fillColor: '#f59e0b', fillOpacity: 1 }).bindTooltip(detail));
+  }
+  estado.paradasRecorrido = L.layerGroup(layers).addTo(mapa);
 }
 
 function limpiarRecorrido() {
@@ -866,6 +955,11 @@ function limpiarRecorrido() {
     mapa.removeLayer(estado.puntosRecorrido);
     estado.puntosRecorrido = null;
   }
+  if (estado.paradasRecorrido) {
+    mapa.removeLayer(estado.paradasRecorrido);
+    estado.paradasRecorrido = null;
+  }
+  estado.posicionesRecorrido = [];
   estado.coordenadasRecorrido = [];
   sincronizarEstela3d();
 }
@@ -915,6 +1009,18 @@ function conectarWs() {
         estado.recorrido.addLatLng(coordinate);
         if (!estado.coordenadasRecorrido.length) estado.coordenadasRecorrido.push([]);
         estado.coordenadasRecorrido.at(-1).push(coordinate);
+        estado.posicionesRecorrido.push(m.position);
+        if (estaParado(m.position)) {
+          const count = Math.min(m.position.stopped_pulses || 3, estado.posicionesRecorrido.length);
+          const stoppedSince = estado.posicionesRecorrido.at(-count)?.device_time ??
+            estado.posicionesRecorrido.at(-count)?.server_time ?? m.position.stopped_since;
+          for (const point of estado.posicionesRecorrido.slice(-count)) {
+            point.movement_state = 'stopped';
+            point.stopped_pulses = m.position.stopped_pulses || count;
+            point.stopped_since = stoppedSince;
+          }
+        }
+        renderParadasRecorrido();
         sincronizarEstela3d();
       }
       renderLista();

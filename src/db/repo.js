@@ -1,5 +1,6 @@
 import { query } from './pool.js';
 import { logger } from '../logger.js';
+import { annotateMovementStates, currentMovementState } from '../tracking/movement.js';
 
 // Caché en memoria imei -> device row. Evita un SELECT por cada trama.
 //
@@ -261,7 +262,12 @@ export async function listDevicesWithLastPosition() {
     WHERE d.archived_at IS NULL
     ORDER BY d.alias NULLS LAST, d.imei
   `);
-  return rows.map(shapeDeviceRow);
+  const devices = rows.map(shapeDeviceRow);
+  await Promise.all(devices.map(async (device) => {
+    if (!device.last_position) return;
+    Object.assign(device.last_position, await getCurrentMovementState(device.id));
+  }));
+  return devices;
 }
 
 export async function getDeviceByImei(imei) {
@@ -280,7 +286,23 @@ export async function getLastPosition(deviceId) {
      LIMIT 1`,
     [deviceId],
   );
-  return rows[0] ?? null;
+  const position = rows[0] ?? null;
+  if (position) Object.assign(position, await getCurrentMovementState(deviceId));
+  return position;
+}
+
+/** Estado actual a partir de los últimos tres fixes, usado por API y WebSocket. */
+export async function getCurrentMovementState(deviceId) {
+  const { rows } = await query(
+    `SELECT id, valid, device_time, server_time,
+            ST_Y(geom::geometry) AS latitude, ST_X(geom::geometry) AS longitude
+     FROM positions
+     WHERE device_id = $1 AND geom IS NOT NULL AND valid = true
+     ORDER BY server_time DESC, id DESC
+     LIMIT 3`,
+    [deviceId],
+  );
+  return currentMovementState(rows.reverse());
 }
 
 export async function listEvents(deviceId, { desde = null, limit = 100 } = {}) {
@@ -381,7 +403,7 @@ export async function listPositions(deviceId, { desde = null, hasta = null, limi
   );
   // Se devuelven en orden cronológico ascendente: así el frontend dibuja la
   // polilínea directo sin invertir el arreglo.
-  return rows.reverse();
+  return annotateMovementStates(rows.reverse());
 }
 
 function shapeDeviceRow(r) {

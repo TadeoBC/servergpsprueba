@@ -46,3 +46,12 @@ test('el selector ofrece estilos vectoriales limpios con fallback clásico', () 
   assert.match(js, /if \(def\.type === 'vector' && L\.maplibreGL\)/);
   assert.match(js, /customAttribution: def\.attribution/);
 });
+
+test('la UI representa paradas y muestra velocidad en los marcadores', () => {
+  assert.match(js, /function aplicarTooltipVelocidad/);
+  assert.match(js, /function renderParadasRecorrido/);
+  assert.match(js, /movement_state === 'stopped'/);
+  assert.match(js, /color: '#f59e0b'/);
+  assert.match(css, /\.marcador\.parado/);
+  assert.match(css, /\.tooltip-velocidad/);
+});

@@ -30,6 +30,11 @@ Los recorridos aceptan `desde`, `hasta` (ISO 8601), `limit` (máximo 5000) y
 traza GPS filtrada si OSRM no responde. Los eventos aceptan `desde` y `limit`
 (máximo 1000).
 
+Las posiciones incluyen estado de movimiento derivado: `movement_state` vale
+`moving` o `stopped`; una parada se confirma al tercer pulso consecutivo dentro
+de 15 m. `stopped_pulses` contiene la cantidad detectada y `stopped_since` la
+hora del primer pulso de la parada.
+
 ```bash
 curl -H 'Authorization: Bearer atlyx_TU_CLAVE' \
   'https://view.atlyx.online/api/v1/devices/351840620204473/last'

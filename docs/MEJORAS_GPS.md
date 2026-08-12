@@ -7,6 +7,19 @@ fix llega después. Al seleccionar un equipo carga automáticamente seis horas d
 recorrido y continúa extendiendo la línea con las posiciones recibidas por
 WebSocket. Los botones permiten consultar 1 h, 6 h, 24 h o 7 días.
 
+### Detección de vehículo parado
+
+El servidor considera que el vehículo está `stopped` cuando recibe tres o más
+pulsos consecutivos dentro de un radio de 15 metros. No se exige que latitud y
+longitud sean idénticas porque un GPS estacionario normalmente presenta algunos
+metros de deriva. Al salir de ese radio la cuenta comienza de nuevo.
+
+Los endpoints de última posición, listado de dispositivos e historial incluyen
+`movement_state`, `stopped_pulses` y `stopped_since`. La interfaz muestra el pin
+y los tramos estacionarios en naranja; las paradas de coordenada idéntica llevan
+además un punto naranja para que sean visibles. Al pasar el cursor o tocar el pin
+se muestra la velocidad y el estado, también en mosaico y en vista 3D.
+
 ## Telemetría
 
 La batería, señal GSM, ACC, estado de fix y odómetro se almacenan en
