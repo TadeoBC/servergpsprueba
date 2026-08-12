@@ -12,7 +12,7 @@ const estado = {
   recorrido: null, // L.Polyline
   puntosRecorrido: null, // L.LayerGroup
   coordenadasRecorrido: [], // segmentos [[[lat, lon], ...], ...]
-  temaMapa: localStorage.getItem('atlyx_tema_mapa') || 'calles',
+  temaMapa: cargarTemaMapa(),
   modoVista: '2d', // 2d | 3d | mosaico
   siguiendo: false,
   vigilados: cargarVigilados(),
@@ -34,21 +34,44 @@ function cargarVigilados() {
   }
 }
 
+function cargarTemaMapa() {
+  const version = '2';
+  const key = 'atlyx_tema_mapa';
+  // La versión anterior solo tenía fondos raster. Estrenamos Fiord una vez y
+  // después respetamos la elección guardada del usuario.
+  if (localStorage.getItem('atlyx_tema_version') !== version) {
+    localStorage.setItem('atlyx_tema_version', version);
+    localStorage.setItem(key, 'fiord');
+    return 'fiord';
+  }
+  return localStorage.getItem(key) || 'fiord';
+}
+
 // ── mapa ─────────────────────────────────────────────────────────────────────
 // Centro inicial: San Juan del Río, Querétaro. Se reencuadra en cuanto llega
 // la primera posición real.
 const mapa = L.map('mapa', { zoomControl: true, attributionControl: true }).setView([20.3897, -99.9961], 13);
 
 const TEMAS_MAPA = {
+  fiord: {
+    type: 'vector', style: 'https://tiles.openfreemap.org/styles/fiord',
+    attribution: '&copy; OpenFreeMap &copy; OpenMapTiles &copy; OpenStreetMap',
+  },
+  darkmatter: {
+    type: 'vector', style: 'https://tiles.openfreemap.org/styles/dark',
+    attribution: '&copy; OpenFreeMap &copy; OpenMapTiles &copy; OpenStreetMap',
+  },
+  positron: {
+    type: 'vector', style: 'https://tiles.openfreemap.org/styles/positron',
+    attribution: '&copy; OpenFreeMap &copy; OpenMapTiles &copy; OpenStreetMap',
+  },
   calles: {
+    type: 'raster',
     url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
     options: { maxZoom: 19, attribution: '&copy; colaboradores de OpenStreetMap' },
   },
-  oscuro: {
-    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-    options: { maxZoom: 20, subdomains: 'abcd', attribution: '&copy; OpenStreetMap &copy; CARTO' },
-  },
   satelite: {
+    type: 'raster',
     url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
     options: { maxZoom: 19, attribution: 'Tiles &copy; Esri' },
   },
@@ -57,7 +80,16 @@ const TEMAS_MAPA = {
 let capaBase = crearCapaBase(estado.temaMapa).addTo(mapa);
 
 function crearCapaBase(tema) {
-  const def = TEMAS_MAPA[tema] ?? TEMAS_MAPA.calles;
+  const def = TEMAS_MAPA[tema] ?? TEMAS_MAPA.fiord;
+  if (def.type === 'vector' && L.maplibreGL) {
+    return L.maplibreGL({
+      style: def.style,
+      attributionControl: { customAttribution: def.attribution },
+    });
+  }
+  // Un bloqueador puede impedir cargar el plugin GL: el mapa clásico evita
+  // que la pantalla quede vacía y permite seguir operando la flotilla.
+  if (def.type === 'vector') return L.tileLayer(TEMAS_MAPA.calles.url, TEMAS_MAPA.calles.options);
   return L.tileLayer(def.url, def.options);
 }
 
@@ -516,7 +548,10 @@ function cambiarTemaMapa(tema) {
   }
   if (estado.mapa3d) {
     estado.mapa3d.setStyle(mapa3dStyle());
-    estado.mapa3d.once('style.load', () => sincronizarEstela3d());
+    estado.mapa3d.once('style.load', () => {
+      asegurarTerreno3d();
+      sincronizarEstela3d();
+    });
   }
 }
 
@@ -605,7 +640,8 @@ function actualizarGpsMosaico(device) {
 }
 
 function mapa3dStyle() {
-  const def = TEMAS_MAPA[estado.temaMapa] ?? TEMAS_MAPA.calles;
+  const def = TEMAS_MAPA[estado.temaMapa] ?? TEMAS_MAPA.fiord;
+  if (def.type === 'vector') return def.style;
   return {
     version: 8,
     sources: {
@@ -619,6 +655,17 @@ function mapa3dStyle() {
   };
 }
 
+function asegurarTerreno3d() {
+  const map3d = estado.mapa3d;
+  if (!map3d?.isStyleLoaded()) return;
+  if (!map3d.getSource('terrain')) {
+    map3d.addSource('terrain', {
+      type: 'raster-dem', url: 'https://tiles.mapterhorn.com/tilejson.json', tileSize: 256,
+    });
+  }
+  map3d.setTerrain({ source: 'terrain', exaggeration: 1.15 });
+}
+
 function asegurarMapa3d() {
   if (estado.mapa3d || !window.maplibregl) return;
   estado.mapa3d = new maplibregl.Map({
@@ -627,6 +674,7 @@ function asegurarMapa3d() {
   });
   estado.mapa3d.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'bottom-right');
   estado.mapa3d.on('load', () => {
+    asegurarTerreno3d();
     sincronizarEstela3d();
     actualizarGps3d(estado.equipos.get(estado.seleccionado));
   });

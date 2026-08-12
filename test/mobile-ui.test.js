@@ -36,3 +36,13 @@ test('el manifiesto permite abrir el panel como web app independiente', () => {
   assert.ok(manifest.icons.some((icon) => icon.purpose.includes('maskable')));
 });
 
+test('el selector ofrece estilos vectoriales limpios con fallback clásico', () => {
+  for (const theme of ['fiord', 'darkmatter', 'positron', 'satelite', 'calles']) {
+    assert.match(html, new RegExp(`<option value="${theme}"`));
+  }
+  assert.match(html, /@maplibre\/maplibre-gl-leaflet@0\.1\.3/);
+  assert.match(js, /tiles\.openfreemap\.org\/styles\/fiord/);
+  assert.match(js, /tiles\.openfreemap\.org\/styles\/dark/);
+  assert.match(js, /if \(def\.type === 'vector' && L\.maplibreGL\)/);
+  assert.match(js, /customAttribution: def\.attribution/);
+});

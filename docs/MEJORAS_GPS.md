@@ -60,13 +60,21 @@ docker compose logs -f app
 Verifica `/api/health`, el marcador, batería, una ruta y luego genera la clave
 API. Antes de usar alarmas con modo SMS/llamada, configura y comprueba el número
 central del dispositivo según el proveedor de la SIM.
+
 ## Seguimiento avanzado y mapas
 
-La barra superior del mapa permite cambiar entre tres fondos (`Calles`,
-`Oscuro` y `Satélite`), mantener centrado el equipo seleccionado con `Seguir`,
+La barra superior del mapa permite cambiar entre cinco fondos (`Dark Matter`,
+`Fiord`, `Claro limpio`, `Satélite` y `Calles clásico`), mantener centrado el equipo seleccionado con `Seguir`,
 activar una perspectiva aérea 3D con terreno y abrir un mosaico de varios GPS.
 Los equipos del mosaico se eligen con el botón `◎` de cada renglón; la selección
 y el tema quedan guardados en el navegador.
+
+Fiord, Dark Matter y Claro limpio son estilos vectoriales servidos por
+OpenFreeMap sobre el esquema OpenMapTiles. Se renderizan con MapLibre dentro de
+Leaflet, por lo que conservan marcadores, estela y mosaico, pero se ven nítidos
+en pantallas Retina. La atribución a OpenFreeMap, OpenMapTiles y OpenStreetMap
+permanece visible. Si el plugin vectorial no carga, se usa Calles clásico como
+fallback y la operación GPS no se interrumpe.
 
 Al cargar un recorrido, `Ajustar estela a calles` solicita
 `ajustar_calles=1`. El servidor:

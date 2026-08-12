@@ -120,9 +120,11 @@
     <main id="area-mapas">
       <div class="barra-mapa" aria-label="Controles de seguimiento">
         <select id="tema-mapa" aria-label="Tema del mapa">
-          <option value="calles">Calles</option>
-          <option value="oscuro">Oscuro</option>
+          <option value="fiord">Fiord</option>
+          <option value="darkmatter">Dark Matter</option>
+          <option value="positron">Claro limpio</option>
           <option value="satelite">Satélite</option>
+          <option value="calles">Calles clásico</option>
         </select>
         <button class="btn pequeno" id="seguir-gps" type="button" aria-pressed="false">◎ Seguir</button>
         <button class="btn pequeno" id="vista-3d" type="button" aria-pressed="false">◩ Vista 3D</button>
@@ -143,6 +145,7 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+  <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.3/leaflet-maplibre-gl.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
