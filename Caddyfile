@@ -1,0 +1,57 @@
+# Caddy — TLS automático para la interfaz web.
+#
+# Solo view.atlyx.online pasa por aquí. El puerto 5023 (ingesta de los
+# rastreadores) va DIRECTO al contenedor de node: es TCP crudo, no HTTP, y Caddy
+# no pinta nada en ese camino.
+
+{
+	# Correo para Let's Encrypt (avisos de expiración). Se toma de ACME_EMAIL.
+	email {$ACME_EMAIL}
+
+	# Descomenta para probar sin gastar el límite de emisión de Let's Encrypt:
+	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+{$VIEW_DOMAIN} {
+	encode zstd gzip
+
+	# El WebSocket de /ws no necesita configuración especial: Caddy v2 pasa el
+	# Upgrade automáticamente en reverse_proxy. Se declara aparte solo para
+	# quitarle el tiempo límite de respuesta, que cortaría la conexión larga.
+	@websocket {
+		header Connection *Upgrade*
+		header Upgrade websocket
+	}
+
+	handle @websocket {
+		reverse_proxy app:{$APP_HTTP_PORT} {
+			flush_interval -1
+		}
+	}
+
+	handle {
+		reverse_proxy app:{$APP_HTTP_PORT} {
+			health_uri /api/health
+			health_interval 30s
+			health_timeout 5s
+		}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "same-origin"
+		-Server
+	}
+
+	log {
+		output stdout
+		format json
+		level INFO
+	}
+}
+
+# Nota: NO se declara un bloque ":80" a propósito. Caddy crea solo la
+# redirección de HTTP a HTTPS para {$VIEW_DOMAIN}, y declarar :80 a mano la
+# desactivaría. Quien llegue por http:// termina en https:// sin hacer nada.

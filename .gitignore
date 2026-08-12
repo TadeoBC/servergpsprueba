@@ -1,0 +1,9 @@
+node_modules/
+.env
+*.log
+logs/
+backups/
+.DS_Store
+caddy_data/
+caddy_config/
+pg_data/

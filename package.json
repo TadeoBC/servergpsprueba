@@ -1,0 +1,33 @@
+{
+  "name": "atlyx-gps",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Rastreo GPS de flotilla de motos — ingesta GT06/JT808/GPS103, PostGIS, API + mapa en vivo",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "migrate": "node src/db/migrate.js",
+    "simulate": "node scripts/simulate.js",
+    "doctor": "node scripts/doctor.js",
+    "hash-password": "node scripts/hash-password.js",
+    "test": "node --test \"test/*.test.js\"",
+    "dev:up": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build",
+    "dev:down": "docker compose -f docker-compose.yml -f docker-compose.dev.yml down",
+    "dev:logs": "docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f app"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "pg": "^8.12.0",
+    "pino": "^9.3.2",
+    "pino-http": "^10.2.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "pino-pretty": "^11.2.2"
+  }
+}

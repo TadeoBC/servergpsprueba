@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>atlyx GPS — flotilla</title>
+
+  <!-- Leaflet por CDN: sin paso de compilación. Si el VPS no tiene salida a
+       internet, descarga estos dos archivos y sírvelos desde /public. -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div class="encabezado">
+        <h1>atlyx <span class="marca">GPS</span></h1>
+        <div class="espaciador"></div>
+        <span class="pastilla" id="estado-ws">conectando…</span>
+        <button class="btn pequeno" id="alternar-panel" type="button" aria-label="Mostrar u ocultar el panel">▲</button>
+        <button class="btn pequeno" id="salir" type="button">Salir</button>
+      </div>
+
+      <section class="seccion">
+        <h2>Equipos (<span id="conteo">0</span>)</h2>
+        <div id="lista"><div class="vacio">Cargando…</div></div>
+      </section>
+
+      <section class="seccion" id="seccion-detalle" hidden>
+        <h2>Detalle</h2>
+        <div class="detalle" id="detalle"></div>
+      </section>
+
+      <section class="seccion">
+        <h2>Recorrido</h2>
+        <div class="controles">
+          <div class="atajos">
+            <button class="btn pequeno" data-rango="1">1 h</button>
+            <button class="btn pequeno" data-rango="6">6 h</button>
+            <button class="btn pequeno" data-rango="24">24 h</button>
+            <button class="btn pequeno" data-rango="168">7 días</button>
+          </div>
+          <div>
+            <label for="desde">Desde</label>
+            <input type="datetime-local" id="desde" />
+          </div>
+          <div>
+            <label for="hasta">Hasta</label>
+            <input type="datetime-local" id="hasta" />
+          </div>
+          <div class="botonera">
+            <button class="btn primario" id="cargar-recorrido" type="button">Cargar recorrido</button>
+            <button class="btn" id="limpiar-recorrido" type="button">Limpiar</button>
+          </div>
+          <div id="info-recorrido" class="vacio" style="padding:0"></div>
+        </div>
+      </section>
+
+      <details class="depuracion" id="depuracion">
+        <summary>Panel de depuración</summary>
+        <div class="cuerpo" id="cuerpo-depuracion">
+          <div class="vacio" style="padding:0">Selecciona un equipo para ver su último paquete.</div>
+        </div>
+      </details>
+    </aside>
+
+    <main id="mapa"></main>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

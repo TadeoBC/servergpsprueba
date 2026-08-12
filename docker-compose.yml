@@ -1,0 +1,136 @@
+# atlyx-gps — despliegue completo.
+#
+# En macOS (Docker Desktop) y en Ubuntu se levanta igual:
+#   docker compose up -d
+#
+# Servicios:
+#   db     PostgreSQL 16 + PostGIS 3.4
+#   app    ingesta TCP (5023) + API/WebSocket (8080, interno)
+#   caddy  HTTPS automático para view.atlyx.online
+#
+# El 5023 se publica DIRECTO desde el contenedor app: no pasa por Caddy, porque
+# el rastreador habla TCP crudo, no HTTP.
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-atlyx}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?define POSTGRES_PASSWORD en .env}
+      POSTGRES_DB: ${POSTGRES_DB:-atlyx_gps}
+      # Acelera la carga de posiciones sin arriesgar el histórico de forma seria.
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      # Copias de seguridad: backup.sh escribe aquí desde el host.
+      - ./backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-atlyx} -d ${POSTGRES_DB:-atlyx_gps}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    mem_limit: 1g
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    # No se publica el 5432 a internet. Para conectarte desde tu Mac usa un
+    # túnel SSH:  ssh -L 5432:localhost:5432 usuario@34.174.220.57
+    expose:
+      - "5432"
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-atlyx}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-atlyx_gps}
+      TCP_PORT: ${TCP_PORT:-5023}
+      HTTP_PORT: ${HTTP_PORT:-8080}
+      PUBLIC_URL: ${PUBLIC_URL:-https://view.atlyx.online}
+      AUTH_USER: ${AUTH_USER:-admin}
+      AUTH_PASSWORD_HASH: ${AUTH_PASSWORD_HASH:-}
+      AUTH_PASSWORD: ${AUTH_PASSWORD:-}
+      SESSION_SECRET: ${SESSION_SECRET}
+      SESSION_HOURS: ${SESSION_HOURS:-168}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      DISPLAY_TIMEZONE: ${DISPLAY_TIMEZONE:-America/Mexico_City}
+      STATUS_GREEN_MINUTES: ${STATUS_GREEN_MINUTES:-5}
+      STATUS_AMBER_MINUTES: ${STATUS_AMBER_MINUTES:-30}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_PRETTY: ${LOG_PRETTY:-false}
+      STORE_RAW_HEX: ${STORE_RAW_HEX:-true}
+      TCP_SOCKET_TIMEOUT_MS: ${TCP_SOCKET_TIMEOUT_MS:-300000}
+      MAX_CONN_PER_IP: ${MAX_CONN_PER_IP:-20}
+      CONN_RATE_PER_IP: ${CONN_RATE_PER_IP:-60}
+      CONN_RATE_WINDOW_MS: ${CONN_RATE_WINDOW_MS:-60000}
+      VPS_PUBLIC_IP: ${VPS_PUBLIC_IP:-}
+      GPS_DOMAIN: ${GPS_DOMAIN:-gps.atlyx.online}
+      VIEW_DOMAIN: ${VIEW_DOMAIN:-view.atlyx.online}
+    ports:
+      # Ingesta de rastreadores: expuesta a internet a propósito.
+      - "${TCP_PORT:-5023}:${TCP_PORT:-5023}"
+      # El 8080 NO se publica: solo Caddy lo alcanza por la red interna.
+    expose:
+      - "${HTTP_PORT:-8080}"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${HTTP_PORT:-8080}/api/health > /dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    mem_limit: 512m
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "7"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3
+    environment:
+      VIEW_DOMAIN: ${VIEW_DOMAIN:-view.atlyx.online}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+      APP_HTTP_PORT: ${HTTP_PORT:-8080}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Los certificados persisten: sin esto Let's Encrypt te limita por pedirlos
+      # de nuevo en cada reinicio.
+      - caddy_data:/data
+      - caddy_config:/config
+    healthcheck:
+      test: ["CMD", "caddy", "version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    mem_limit: 256m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  pg_data:
+  caddy_data:
+  caddy_config:

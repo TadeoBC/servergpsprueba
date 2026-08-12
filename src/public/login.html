@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Entrar — atlyx GPS</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <form class="login-caja" id="form">
+    <h1>atlyx <span style="color:var(--acento)">GPS</span></h1>
+    <p class="sub">Rastreo de flotilla</p>
+
+    <label for="usuario">Usuario</label>
+    <input id="usuario" name="usuario" autocomplete="username" required autofocus />
+
+    <label for="password">Contraseña</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required />
+
+    <button class="btn primario" type="submit">Entrar</button>
+    <div class="login-error" id="error" role="alert"></div>
+  </form>
+
+  <script>
+    const form = document.getElementById('form');
+    const error = document.getElementById('error');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      error.textContent = '';
+      const boton = form.querySelector('button');
+      boton.disabled = true;
+      boton.textContent = 'Entrando…';
+      try {
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            usuario: document.getElementById('usuario').value,
+            password: document.getElementById('password').value,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+          location.href = '/';
+          return;
+        }
+        error.textContent = data.error || 'No se pudo entrar';
+      } catch (err) {
+        error.textContent = 'Error de red: ' + err.message;
+      } finally {
+        boton.disabled = false;
+        boton.textContent = 'Entrar';
+      }
+    });
+  </script>
+</body>
+</html>

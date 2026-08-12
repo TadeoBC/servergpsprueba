@@ -1,0 +1,35 @@
+# Sobrecapa para desarrollo en macOS.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#   (o simplemente:  npm run dev:up)
+#
+# Diferencias con producción:
+#   - publica la web en el 8088 del host → http://localhost:8088
+#     (no en el 8080: es un puerto muy peleado, y si otra aplicación tuya ya
+#     registró un service worker en localhost:8080 el navegador te sirve ESA
+#     aplicación en vez de esta, sin avisar),
+#   - publica postgres en el 5433 del host (no en el 5432, para no chocar con un
+#     postgres que ya tengas instalado en la Mac):
+#       psql -h localhost -p 5433 -U atlyx atlyx_gps
+#   - apaga Caddy (no hace falta sin dominio ni TLS),
+#   - cookies sin Secure, porque en local se navega por http.
+#
+# Este archivo NO se aplica solo: hay que nombrarlo con -f. A propósito, para
+# que nunca acabe publicando puertos de más en el VPS.
+
+services:
+  app:
+    ports:
+      - "${TCP_PORT:-5023}:${TCP_PORT:-5023}"
+      - "${DEV_HTTP_PORT:-8088}:${HTTP_PORT:-8080}"
+    environment:
+      COOKIE_SECURE: "false"
+      LOG_LEVEL: debug
+
+  db:
+    ports:
+      - "5433:5432"
+
+  caddy:
+    # En local no se usa: no hay dominio público que certificar.
+    profiles: ["produccion"]

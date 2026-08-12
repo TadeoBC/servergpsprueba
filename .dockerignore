@@ -1,0 +1,12 @@
+node_modules
+npm-debug.log
+.env
+.git
+.gitignore
+backups
+logs
+caddy_data
+caddy_config
+pg_data
+*.md
+!README.md
