@@ -260,6 +260,24 @@ La restricción única indexada sobre `(device_id, device_time)` permite descart
 
 Hay índices por `(device_id, created_at DESC)` y `(tipo, created_at DESC)`. La tabla conserva logins, registros, autenticaciones, alarmas, tramas desconocidas y tramas sin identificar según el pipeline de ingesta.
 
+## 8 bis. Claves de integración con `npm run api-key`
+
+Las claves `atlyx_…` de la API pública se emiten desde **Integración API** en el
+panel, o sin navegador con `scripts/api-key.js`:
+
+```bash
+docker compose exec app npm run api-key -- crear "POS Glimmer"
+docker compose exec app npm run api-key -- crear "Temporal" --vence=2026-12-31
+docker compose exec app npm run api-key -- listar
+docker compose exec app npm run api-key -- revocar <id>
+```
+
+El secreto completo se imprime una sola vez; la base guarda únicamente su
+SHA-256. El script usa la misma conexión que el servidor, así que hay que
+ejecutarlo donde `POSTGRES_HOST` resuelva: dentro del contenedor, o desde la Mac
+con `POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=5433` si está levantada la sobrecapa
+de desarrollo.
+
 ## 9. Diagnóstico con `npm run doctor`
 
 El script `doctor` existe en `package.json` y ejecuta `scripts/doctor.js`:

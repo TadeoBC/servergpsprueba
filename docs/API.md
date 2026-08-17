@@ -12,6 +12,20 @@ se muestra una vez; la base guarda únicamente SHA-256. Si se pierde, revócala 
 genera otra. No pongas la clave en query strings porque proxies e historiales
 pueden registrarla.
 
+Sin navegador —al enchufar el POS a un servidor recién levantado, o al preparar
+un entorno de pruebas— la misma clave se emite por línea de comandos:
+
+```bash
+docker compose exec app npm run api-key -- crear "POS Glimmer"
+docker compose exec app npm run api-key -- listar
+docker compose exec app npm run api-key -- revocar <id>
+```
+
+El script se conecta a la misma base que el servidor, así que hay que
+ejecutarlo donde `POSTGRES_HOST` resuelva: dentro del contenedor, o desde el
+host con `POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=5433` si está la sobrecapa de
+desarrollo.
+
 ## Endpoints
 
 - `GET /api/v1/devices/:imei/last`: equipo, telemetría persistida y última

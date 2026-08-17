@@ -14,6 +14,7 @@
     "simulate": "node scripts/simulate.js",
     "doctor": "node scripts/doctor.js",
     "hash-password": "node scripts/hash-password.js",
+    "api-key": "node scripts/api-key.js",
     "test": "node --test \"test/*.test.js\"",
     "dev:up": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build",
     "dev:down": "docker compose -f docker-compose.yml -f docker-compose.dev.yml down",

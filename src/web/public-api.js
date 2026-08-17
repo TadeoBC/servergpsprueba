@@ -1,12 +1,26 @@
 import express from 'express';
 import { config } from '../config.js';
 import { requireApiKey } from './api-keys.js';
-import { getDeviceByImei, getLastPosition, listPositions, listEvents, listDeviceCommands } from '../db/repo.js';
+import { getDeviceByImei, getLastPosition, listPositions, listEvents, listDeviceCommands, listDevicesWithLastPosition } from '../db/repo.js';
 import { buildMatchedTrace } from '../tracking/map-match.js';
 
 export function buildPublicApiRouter() {
   const router = express.Router();
   router.use(requireApiKey);
+
+  // El consumidor externo (el POS) no conoce los IMEI de antemano: necesita
+  // descubrir la flota para poder pedir el resto de rutas, que van por IMEI.
+  router.get('/devices', async (req, res, next) => {
+    try {
+      const devices = await listDevicesWithLastPosition();
+      res.json({
+        devices: devices.map((d) => ({
+          ...publicDevice(d),
+          last_position: d.last_position,
+        })),
+      });
+    } catch (err) { next(err); }
+  });
 
   router.get('/devices/:imei/last', async (req, res, next) => {
     try {
