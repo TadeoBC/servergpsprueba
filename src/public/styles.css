@@ -57,6 +57,11 @@ html, body {
   margin: 0;
   padding: 0;
   height: 100%;
+  /* La aplicación ocupa exactamente la ventana: cualquier barra de
+     desplazamiento aquí significa que algo desbordó, y arrastra el panel fuera
+     de la vista al rodar la rueda. */
+  max-width: 100%;
+  overflow-x: hidden;
   background: var(--bg);
   color: var(--texto);
   font: 13px/1.5 var(--mono);
@@ -101,6 +106,10 @@ h1, h2, h3 { margin: 0; }
   align-items: center;
   gap: 14px;
   padding: 0 14px;
+  /* Sin esto, la suma de marca + pestañas + buscador + botones desbordaba en
+     ventanas estrechas y empujaba el contenido fuera de la pantalla. */
+  min-width: 0;
+  overflow: hidden;
   background: linear-gradient(180deg, #08121a 0%, #060c11 100%);
   border-bottom: 1px solid var(--borde);
   box-shadow: 0 1px 0 rgba(34, 224, 240, .18), 0 8px 24px rgba(0, 0, 0, .5);
@@ -117,7 +126,18 @@ h1, h2, h3 { margin: 0; }
 }
 .marca-ver { color: var(--acento-2); opacity: .75; font-size: 15px; }
 
-.pestanas { display: flex; gap: 2px; align-items: stretch; height: 100%; }
+.pestanas {
+  display: flex;
+  gap: 2px;
+  align-items: stretch;
+  height: 100%;
+  /* Con la ventana estrecha las pestañas se desplazan dentro de su propia
+     caja en vez de empujar la barra entera fuera de la pantalla. */
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.pestanas::-webkit-scrollbar { display: none; }
 .pestanas button {
   position: relative;
   background: transparent;
@@ -153,7 +173,9 @@ h1, h2, h3 { margin: 0; }
 .conteo-alertas[hidden] { display: none; }
 
 .buscador {
-  flex: 1;
+  flex: 1 1 120px;
+  /* Puede ceder ancho hasta casi desaparecer antes de romper la barra. */
+  min-width: 0;
   max-width: 320px;
   display: flex;
   align-items: center;
@@ -226,7 +248,10 @@ h1, h2, h3 { margin: 0; }
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: var(--rail-ancho) var(--panel-ancho) minmax(0, 1fr) auto;
+  /* El ancho del panel se topa contra la ventana: los valores por vista llegan
+     a 760 px y en una ventana estrecha empujaban el mapa fuera del área
+     visible, dejando el layout desplazado. */
+  grid-template-columns: var(--rail-ancho) min(var(--panel-ancho), 55vw) minmax(0, 1fr) auto;
   min-height: 0;
   overflow: hidden;
 }

@@ -240,6 +240,20 @@ function configurarInterfazMovil() {
   });
   window.addEventListener('orientationchange', programarResizeMapas);
   window.visualViewport?.addEventListener('resize', programarResizeMapas);
+
+  // Redimensionar la ventana en escritorio no disparaba nada: orientationchange
+  // es de móvil y visualViewport solo reacciona al zoom y al teclado virtual.
+  // Sin esto Leaflet seguía dibujando con el tamaño que tenía al cargar, y el
+  // mapa aparecía como un recuadro descolocado dentro de su contenedor.
+  window.addEventListener('resize', programarResizeMapas);
+
+  // El contenedor del mapa también cambia sin que cambie la ventana: al abrir o
+  // cerrar el panel lateral y al pasar de una vista a otra, porque cada una
+  // tiene su propio ancho. Observarlo cubre todos esos casos de una vez.
+  const areaMapas = document.getElementById('area-mapas');
+  if (areaMapas && typeof ResizeObserver === 'function') {
+    new ResizeObserver(programarResizeMapas).observe(areaMapas);
+  }
 }
 
 function cambiarVista(vista) {
