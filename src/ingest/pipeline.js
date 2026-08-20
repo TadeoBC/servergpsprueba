@@ -6,6 +6,7 @@ import {
   resolveDeviceCommand, getCurrentMovementState,
 } from '../db/repo.js';
 import { bus, recordPacket } from './bus.js';
+import { normalizeBatteryReading } from '../tracking/battery.js';
 
 /**
  * Toma una trama ya decodificada y la persiste:
@@ -66,7 +67,7 @@ export async function processDecoded(decoded, session) {
     session.device = refreshedDevice;
   }
 
-  const telemetryPatch = extractTelemetry(decoded);
+  const telemetryPatch = extractTelemetry(decoded, device.telemetry);
   if (Object.keys(telemetryPatch).length) {
     const state = await updateDeviceTelemetry(device.id, telemetryPatch).catch((err) => {
       logger.error({ err: err.message, imei: device.imei }, 'no se pudo actualizar la telemetría');
@@ -226,10 +227,15 @@ async function savePosition(device, position, decoded, attributes) {
   return fila;
 }
 
-function extractTelemetry(decoded) {
+function extractTelemetry(decoded, previousTelemetry = {}) {
   const a = decoded.attributes ?? {};
   const out = {};
-  if (a.bateria) out.bateria = a.bateria;
+  if (a.bateria) {
+    const battery = normalizeBatteryReading(a.bateria, previousTelemetry?.bateria);
+    // Bytes fuera de las escalas conocidas no reemplazan la última lectura
+    // válida que ya está guardada para el dispositivo.
+    if (battery) out.bateria = battery;
+  }
   if (a.gsm_signal !== undefined) out.gsm_signal = a.gsm_signal;
   if (a.terminal) out.terminal = a.terminal;
   if (a.acc_encendido !== undefined) out.acc_encendido = a.acc_encendido;

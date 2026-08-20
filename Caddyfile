@@ -55,3 +55,100 @@
 # Nota: NO se declara un bloque ":80" a propósito. Caddy crea solo la
 # redirección de HTTP a HTTPS para {$VIEW_DOMAIN}, y declarar :80 a mano la
 # desactivaría. Quien llegue por http:// termina en https:// sin hacer nada.
+
+# ──────────────────────────────────────────────────────────────────────────
+#  POSly / Ocelotl — bloque de sitio para el Caddy que YA corre en el VPS
+#
+#  deploy.sh genera este bloque con el dominio real en deploy/Caddyfile.pos y,
+#  si encuentra el Caddyfile del contenedor de Caddy, lo agrega ahí (con
+#  respaldo previo) y recarga. Con --no-caddy solo lo deja escrito para
+#  pegarlo a mano.
+#
+#  Requisito: el contenedor posly-vps-app tiene que estar conectado a la MISMA
+#  red de Docker que Caddy para que resuelva el nombre `posly-vps-app`.
+#  deploy.sh lo hace con `docker network connect`.
+#
+#  No se publican 80/443 desde este stack: los tiene el Caddy existente y solo
+#  un proceso puede escucharlos.
+# ──────────────────────────────────────────────────────────────────────────
+
+pos.atlyx.online {
+	encode zstd gzip
+
+	# El backend hace app.set("trust proxy", 1) para leer la IP real del
+	# cliente. Caddy ya manda X-Forwarded-For/Proto/Host; X-Real-IP es para
+	# los logs de pino.
+	# El upgrade de WebSocket (socket.io, namespace /realtime) lo maneja Caddy
+	# de forma nativa, no hace falta configurar nada extra.
+	reverse_proxy posly-vps-app:3002 {
+		header_up X-Real-IP {remote_host}
+	}
+}
+
+# ──────────────────────────────────────────────────────────────────────────
+#  LandingYEI — bloque de sitio para el Caddy que YA corre en el VPS
+#
+#  deploy.sh genera este bloque con el dominio real en deploy/Caddyfile.landing
+#  y, si encuentra el Caddyfile del contenedor de Caddy, lo agrega ahí (con
+#  respaldo, `caddy validate` y recarga en caliente). Con --no-caddy solo lo
+#  deja escrito para pegarlo a mano.
+#
+#  Requisito: el contenedor atlyx-landing tiene que estar en la MISMA red de
+#  Docker que Caddy para que resuelva el nombre `atlyx-landing`. deploy.sh lo
+#  hace con `docker network connect`.
+#
+#  Las cabeceras de seguridad (CSP, HSTS, X-Frame-Options) las pone Next mismo
+#  en next.config.mjs; no se duplican aquí.
+# ──────────────────────────────────────────────────────────────────────────
+
+ec.atlyx.online {
+	encode zstd gzip
+
+	reverse_proxy atlyx-landing:3100 {
+		header_up X-Real-IP {remote_host}
+	}
+}
+
+# One Day Less — site block for the Caddy container that already serves the
+# other projects on this VPS.
+#
+# It is not a standalone Caddyfile. deploy.sh appends it to the Caddyfile that
+# the running Caddy container mounts (taking a backup first), validates the
+# result and reloads in place. Nothing here publishes a port: 80 and 443 belong
+# to that one Caddy, and only one process can hold them.
+#
+# `odl-api` and `odl-web` resolve because both containers join the proxy
+# network in docker-compose.yml. If Caddy answers 502, that network membership
+# is the first thing to check.
+
+odl.atlyx.online {
+	encode zstd gzip
+
+	# The API keeps its own /api/v1 prefix, so the path passes through
+	# untouched. X-Forwarded-* is added by Caddy; X-Real-IP is for pino's logs.
+	handle /api/* {
+		reverse_proxy odl-api:3000 {
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
+	# Everything else is the React bundle. nginx inside odl-web does the
+	# single-page-app fallback, so deep links survive a refresh.
+	handle {
+		reverse_proxy odl-web:80
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "same-origin"
+		-Server
+	}
+
+	log {
+		output stdout
+		format json
+		level INFO
+	}
+}

@@ -460,15 +460,29 @@ function readTerminalInfo(msg, r) {
 }
 
 function readVoltageLevel(msg, r) {
-  const nivel = r.field('nivel_voltaje', 1, (b) => b[0], 'S11L observado: escala cruda 0..15; GT06 clásico usa 0..6.');
-  const max = nivel <= 6 ? 6 : nivel <= 15 ? 15 : null;
-  const porcentaje = max ? Math.round((nivel / max) * 100) : null;
+  const nivel = r.field(
+    'nivel_voltaje',
+    1,
+    (b) => b[0],
+    'Escala dependiente del firmware: GT06 clásico 0..6, algunos S11L 0..15, ' +
+      'y el S11L de esta flotilla manda el porcentaje 0..100 directo.',
+  );
+  // Aquí solo se propone una escala a partir del byte suelto. La decisión final
+  // la toma normalizeBatteryReading(), que sí conoce el histórico del equipo y
+  // puede sostener la escala cuando el porcentaje cae por debajo de 15.
+  const max = nivel <= 6 ? 6 : nivel <= 15 ? 15 : nivel <= 100 ? 100 : null;
+  const porcentaje = max ? Math.min(100, Math.round((nivel / max) * 100)) : null;
   msg.attributes.bateria = {
     nivel: nivel,
     escala_max: max,
-    etiqueta: nivel <= 6 ? (VOLTAGE_LEVELS[nivel] ?? `desconocido_${nivel}`)
-      : nivel <= 15 ? (porcentaje <= 20 ? 'muy_bajo' : porcentaje <= 40 ? 'bajo' : porcentaje <= 70 ? 'medio' : porcentaje < 100 ? 'alto' : 'lleno')
-      : `desconocido_${nivel}`,
+    etiqueta: max === 6 ? (VOLTAGE_LEVELS[nivel] ?? `desconocido_${nivel}`)
+      : max === null ? `desconocido_${nivel}`
+      : porcentaje <= 10 ? 'critico'
+      : porcentaje <= 20 ? 'muy_bajo'
+      : porcentaje <= 40 ? 'bajo'
+      : porcentaje <= 70 ? 'medio'
+      : porcentaje < 100 ? 'alto'
+      : 'lleno',
     porcentaje_aprox: porcentaje,
   };
 }

@@ -48,16 +48,75 @@ export function filterGpsTrace(positions, { maxPoints = DEFAULT_MAX_POINTS } = {
   return out;
 }
 
-/** Separa periodos largos sin señal para que OSRM no invente una carretera entre viajes. */
-export function splitTrace(points, { gapSeconds = 600 } = {}) {
+export const SPLIT_DEFAULTS = {
+  gapSeconds: 600,        // tope duro: 10 min sin un solo pulso ya es un corte
+  gapFactor: 6,           // …o 6 veces la cadencia habitual del propio equipo
+  minJumpMeters: 300,     // por debajo de esto el hueco no merece romper la línea
+  jumpMeters: 1000,       // un salto así entre dos pulsos consecutivos es sospechoso
+  maxImpliedKmh: 120,     // …y a esta velocidad implícita, imposible en reparto urbano
+};
+
+function tiempoDe(point) {
+  const t = new Date(point?.device_time ?? point?.server_time ?? 0).getTime();
+  return Number.isFinite(t) ? t : null;
+}
+
+/**
+ * Cadencia habitual de reporte (mediana de los deltas). Se usa como referencia
+ * porque cada equipo reporta a su ritmo: exigirle el mismo hueco fijo a uno que
+ * manda cada 10 s y a otro que manda cada 2 min da resultados muy distintos.
+ */
+function cadenciaMedianaSegundos(points) {
+  const deltas = [];
+  for (let i = 1; i < points.length; i++) {
+    const a = tiempoDe(points[i - 1]);
+    const b = tiempoDe(points[i]);
+    if (a === null || b === null || b <= a) continue;
+    deltas.push((b - a) / 1000);
+  }
+  if (!deltas.length) return null;
+  deltas.sort((x, y) => x - y);
+  return deltas[Math.floor(deltas.length / 2)];
+}
+
+/**
+ * Parte la traza en tramos realmente recorridos.
+ *
+ * Un corte significa "entre estos dos pulsos no sabemos por dónde anduvo", y es
+ * lo que evita que se dibuje —o que OSRM invente— una carretera que el vehículo
+ * nunca tomó. El caso que motivó esto: el equipo se apaga en ruta, la unidad se
+ * traslada cargada y se vuelve a encender en otro punto; sin corte, el mapa
+ * mostraba un trayecto continuo que nunca ocurrió.
+ *
+ * Se corta cuando pasa cualquiera de estas cosas:
+ *   · el hueco temporal supera el tope duro (gapSeconds);
+ *   · el hueco supera varias veces la cadencia normal del equipo y además el
+ *     vehículo apareció a más de minJumpMeters de donde se quedó;
+ *   · el salto es grande y exigiría una velocidad imposible (teletransporte).
+ */
+export function splitTrace(points, options = {}) {
+  const { gapSeconds, gapFactor, minJumpMeters, jumpMeters, maxImpliedKmh } = { ...SPLIT_DEFAULTS, ...options };
+  const cadencia = cadenciaMedianaSegundos(points);
+  // El umbral por cadencia nunca baja de 60 s ni sube del tope duro: así un
+  // equipo con reporte muy espaciado no provoca cortes en cada pulso.
+  const umbralCadencia = cadencia ? Math.min(gapSeconds, Math.max(60, cadencia * gapFactor)) : gapSeconds;
+
   const groups = [];
   let current = [];
   for (const point of points) {
     const previous = current.at(-1);
     if (previous) {
-      const a = new Date(previous.device_time ?? previous.server_time ?? 0).getTime();
-      const b = new Date(point.device_time ?? point.server_time ?? 0).getTime();
-      if (Number.isFinite(a) && Number.isFinite(b) && b - a > gapSeconds * 1000) {
+      const a = tiempoDe(previous);
+      const b = tiempoDe(point);
+      const segundos = a !== null && b !== null ? (b - a) / 1000 : null;
+      const metros = distanceMeters(previous, point);
+      const kmhImplicita = segundos && segundos > 0 ? (metros / segundos) * 3.6 : null;
+
+      const huecoDuro = segundos !== null && segundos > gapSeconds;
+      const huecoRelativo = segundos !== null && segundos > umbralCadencia && metros > minJumpMeters;
+      const teletransporte = metros > jumpMeters && kmhImplicita !== null && kmhImplicita > maxImpliedKmh;
+
+      if (huecoDuro || huecoRelativo || teletransporte) {
         groups.push(current);
         current = [];
       }
@@ -133,16 +192,18 @@ export async function buildMatchedTrace(positions, {
   baseUrl = 'https://router.project-osrm.org',
   timeoutMs = 5000,
   maxPoints = DEFAULT_MAX_POINTS,
+  splitOptions = {},
   fetchImpl = fetch,
 } = {}) {
   const filtered = filterGpsTrace(positions, { maxPoints });
+  const groups = splitTrace(filtered, splitOptions);
   if (!enabled || filtered.length < 2) {
-    const coordinates = rawCoordinates(filtered);
-    return { coordinates, segments: coordinates.length ? [coordinates] : [], matched: false,
+    // Sin ajuste a calles la geometría sigue siendo la del GPS, pero ya viene
+    // partida: unir los tramos aquí volvería a pintar la recta del apagón.
+    const segments = groups.map(rawCoordinates).filter((segment) => segment.length >= 2);
+    return { coordinates: segments.flat(), segments, matched: false, gaps: Math.max(0, groups.length - 1),
       reason: enabled ? 'pocos_puntos' : 'desactivado' };
   }
-
-  const groups = splitTrace(filtered);
   const segments = [];
   const errors = [];
   let matchedChunks = 0;
@@ -207,6 +268,7 @@ export async function buildMatchedTrace(positions, {
     partial: errors.length > 0 && (matchedChunks > 0 || routedChunks > 0),
     routed_fallback: routedChunks > 0,
     snapped_points: [...snappedPoints.values()],
+    gaps: Math.max(0, groups.length - 1),
     reason: matchedChunks > 0 || routedChunks > 0 ? undefined : 'fallback',
     error: errors.length ? errors[0] : undefined,
     input_points: filtered.length,

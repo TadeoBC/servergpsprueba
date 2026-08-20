@@ -24,7 +24,14 @@ export function createTcpServer() {
 
     const permiso = limiter.tryAcquire(ip);
     if (!permiso.allowed) {
-      logger.warn({ ip, conn: id, motivo: permiso.reason }, 'conexión rechazada por rate limit');
+      // Con una flotilla real este rechazo casi nunca es un atacante: los SIM
+      // M2M del mismo operador salen por un solo NAT, así que todas las motos
+      // comparten IP pública y el límite las cuenta a ellas.
+      logger.warn(
+        { ip, conn: id, motivo: permiso.reason },
+        'conexión rechazada por rate limit; si son equipos tuyos detrás del NAT del operador, ' +
+          'sube MAX_CONN_PER_IP y CONN_RATE_PER_IP',
+      );
       socket.destroy();
       return;
     }

@@ -41,8 +41,27 @@ export function attachWebSocket(server) {
 
   wss.on('connection', (ws, req) => {
     ws.isAlive = true;
+    // Depuración: cada navegador solo recibe las tramas crudas del equipo que
+    // tiene abierto. Con la flotilla entera reportando, difundir cada trama a
+    // todos los clientes multiplicaba el tráfico por el número de pestañas y
+    // ahogaba al navegador con paquetes que ni siquiera iba a mostrar.
+    ws.imeiDepuracion = null;
     ws.on('pong', () => {
       ws.isAlive = true;
+    });
+    ws.on('message', (data) => {
+      // Solo se acepta un mensaje pequeño y conocido: suscribirse a un IMEI.
+      if (data.length > 512) return;
+      let mensaje;
+      try {
+        mensaje = JSON.parse(data.toString());
+      } catch {
+        return;
+      }
+      if (mensaje?.tipo !== 'suscribir') return;
+      ws.imeiDepuracion = typeof mensaje.imei === 'string' && /^[0-9]{1,20}$/.test(mensaje.imei)
+        ? mensaje.imei
+        : null;
     });
     logger.info({ usuario: ws.usuario, clientes: wss.clients.size }, 'cliente WebSocket conectado');
 
@@ -101,8 +120,18 @@ export function attachWebSocket(server) {
 
   // El panel de depuración también recibe las tramas que NO son posición
   // (login, heartbeat, alarmas, tramas raras), para poder verlas en vivo.
+  //
+  // Solo se manda a quien esté mirando ese equipo: el desglose campo por campo
+  // es la carga más pesada del canal y solo la usa el panel abierto.
   bus.on('packet', ({ imei, decoded }) => {
-    difundir({
+    if (!imei) return;
+    const destinatarios = [];
+    for (const ws of wss.clients) {
+      if (ws.readyState === ws.OPEN && ws.imeiDepuracion === imei) destinatarios.push(ws);
+    }
+    if (destinatarios.length === 0) return;
+
+    const payload = JSON.stringify({
       tipo: 'paquete',
       imei,
       paquete: {
@@ -116,6 +145,7 @@ export function attachWebSocket(server) {
         attributes: decoded.attributes ?? {},
       },
     });
+    for (const ws of destinatarios) ws.send(payload);
   });
 
   server.on('close', () => {

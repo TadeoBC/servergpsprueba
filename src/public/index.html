@@ -3,120 +3,265 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#0e1116" />
+  <meta name="theme-color" content="#04070a" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="atlyx GPS" />
-  <title>atlyx GPS — flotilla</title>
+  <title>ATLYX_GPS — control de flotilla</title>
 
   <!-- Leaflet por CDN: sin paso de compilación. Si el VPS no tiene salida a
        internet, descarga estos dos archivos y sírvelos desde /public. -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" />
+  <!-- Tipografías del HUD. Si no cargan, el sistema cae a la pila monoespaciada
+       nativa y la interfaz se ve igual de legible. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Chakra+Petch:wght@600;700&display=swap" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
-<body>
+<body data-vista="mapa">
+  <div class="hud-fondo" aria-hidden="true"></div>
+
+  <!-- ── barra superior ─────────────────────────────────────────────────── -->
+  <header id="barra-superior">
+    <div class="marca">ATLYX_GPS<span class="marca-ver">_v1.0</span></div>
+
+    <nav class="pestanas" id="pestanas" aria-label="Vistas del panel">
+      <button type="button" data-vista="mapa" class="activo" aria-current="page">MAPA</button>
+      <button type="button" data-vista="telemetria">TELEMETRÍA</button>
+      <button type="button" data-vista="recorrido">RECORRIDO</button>
+      <button type="button" data-vista="alertas">ALERTAS<span class="conteo-alertas" id="conteo-alertas" hidden>0</span></button>
+      <button type="button" data-vista="diagnostico">DIAGNÓSTICO</button>
+    </nav>
+
+    <button class="btn pequeno boton-panel" id="mostrar-panel" type="button" aria-controls="sidebar" aria-expanded="false">☰ PANEL</button>
+
+    <label class="buscador">
+      <span aria-hidden="true">⌕</span>
+      <input id="buscar-equipo" type="search" placeholder="Buscar unidad…" aria-label="Buscar unidad por alias, placa o IMEI" />
+    </label>
+
+    <span class="pastilla" id="estado-ws">conectando…</span>
+    <button class="btn icono" id="activar-notificaciones" type="button" title="Alertas del navegador" aria-label="Activar alertas del navegador">△</button>
+    <button class="btn icono peligro" id="salir" type="button" title="Cerrar sesión" aria-label="Cerrar sesión">⏻</button>
+  </header>
+
   <div id="app">
+    <!-- ── panel lateral / hoja móvil ───────────────────────────────────── -->
     <aside id="sidebar" aria-label="Panel de flotilla">
       <button class="asa-panel" id="asa-panel" type="button" aria-label="Abrir o cerrar panel"><span></span></button>
       <div class="encabezado">
-        <h1>atlyx <span class="marca">GPS</span></h1>
+        <h1>UNIDAD :: <span id="titulo-unidad">FLOTILLA</span></h1>
         <div class="espaciador"></div>
-        <span class="pastilla" id="estado-ws">conectando…</span>
-        <button class="btn pequeno" id="activar-notificaciones" type="button">Alertas</button>
-        <button class="btn pequeno" id="alternar-panel" type="button" aria-label="Mostrar u ocultar el panel">▲</button>
-        <button class="btn pequeno" id="salir" type="button">Salir</button>
+        <button class="btn pequeno" id="iniciar-escaneo" type="button">↻ SINCRONIZAR</button>
+        <button class="btn pequeno" id="alternar-panel" type="button" aria-label="Mostrar u ocultar el panel">×</button>
       </div>
 
       <div id="contenido-panel">
-        <section class="seccion" id="seccion-equipos">
-        <h2>Equipos (<span id="conteo">0</span>)</h2>
-        <div id="lista"><div class="vacio">Cargando…</div></div>
-        <details class="administrar-equipos">
-          <summary>Agregar equipo por IMEI</summary>
-          <form class="controles" id="form-equipo">
-            <div><label for="nuevo-imei">IMEI (15 dígitos)</label><input id="nuevo-imei" inputmode="numeric" pattern="[0-9]{15}" minlength="15" maxlength="15" required placeholder="351840620204473" /></div>
-            <div><label for="nuevo-alias">Alias</label><input id="nuevo-alias" maxlength="100" placeholder="Moto 2" /></div>
-            <div><label for="nueva-placa">Placa</label><input id="nueva-placa" maxlength="30" placeholder="ABC-123" /></div>
-            <button class="btn primario" type="submit">Agregar equipo</button>
-            <div id="info-equipo" class="vacio" style="padding:0"></div>
-          </form>
-        </details>
+        <!-- ESTADO_GLOBAL -->
+        <section class="seccion panel-hud" id="panel-estado-global">
+          <h2>ESTADO_GLOBAL <span class="vivo">EN VIVO</span></h2>
+          <div class="gs-rejilla">
+            <div class="gs-celda"><span class="gs-k">UNIDADES</span><span class="gs-v" id="gs-unidades">0</span></div>
+            <div class="gs-celda"><span class="gs-k">EN LÍNEA</span><span class="gs-v acento" id="gs-linea">0</span></div>
+            <div class="gs-celda"><span class="gs-k">EN RUTA</span><span class="gs-v" id="gs-movimiento">0</span></div>
+            <div class="gs-celda"><span class="gs-k">PARADAS</span><span class="gs-v ambar" id="gs-parados">0</span></div>
+            <div class="gs-celda"><span class="gs-k">SIN SEÑAL</span><span class="gs-v" id="gs-sin-senal">0</span></div>
+            <div class="gs-celda"><span class="gs-k">VEL. MÁX</span><span class="gs-v" id="gs-vel-max">—</span></div>
+          </div>
+          <div class="gs-pie">ÚLTIMO PAQUETE :: <span id="gs-ultimo">—</span></div>
         </section>
 
+        <!-- FLUJO_DE_DATOS -->
+        <section class="seccion panel-hud" id="seccion-equipos">
+          <h2>FLUJO_DE_DATOS :: <span class="acento">VIVO</span> <span class="cuenta">(<span id="conteo">0</span>)</span></h2>
+          <div id="lista"><div class="vacio">Cargando…</div></div>
+          <details class="administrar-equipos">
+            <summary>+ DAR DE ALTA UNIDAD POR IMEI</summary>
+            <form class="controles" id="form-equipo">
+              <div><label for="nuevo-imei">IMEI (15 dígitos)</label><input id="nuevo-imei" inputmode="numeric" pattern="[0-9]{15}" minlength="15" maxlength="15" required placeholder="351840620204473" /></div>
+              <div><label for="nuevo-alias">Alias</label><input id="nuevo-alias" maxlength="100" placeholder="Moto 2" /></div>
+              <div><label for="nueva-placa">Placa</label><input id="nueva-placa" maxlength="30" placeholder="ABC-123" /></div>
+              <button class="btn primario" type="submit">AGREGAR UNIDAD</button>
+              <div id="info-equipo" class="vacio" style="padding:0"></div>
+            </form>
+          </details>
+        </section>
+
+        <!-- TELEMETRÍA -->
         <section class="seccion" id="seccion-detalle" hidden>
-        <h2>Detalle</h2>
-        <div class="detalle" id="detalle"></div>
-        <div class="controles">
-          <div><label for="limite-velocidad">Alerta de velocidad (km/h)</label><input type="number" id="limite-velocidad" min="1" max="300" placeholder="Sin límite" /></div>
-          <div><label for="intervalo-reporte">Intervalo deseado (segundos)</label><input type="number" id="intervalo-reporte" min="10" max="86400" placeholder="Sin configurar" /></div>
-          <button class="btn" id="guardar-ajustes" type="button">Guardar ajustes</button>
-          <button class="btn primario" id="aplicar-intervalo" type="button">Aplicar intervalo al GPS</button>
-          <button class="btn peligro" id="quitar-equipo" type="button">Quitar equipo de la flotilla</button>
-          <div id="info-ajustes" class="vacio" style="padding:0"></div>
-        </div>
-        <div class="controles comandos">
-          <label>Comandos seguros S11L</label>
-          <div class="botonera">
-            <button class="btn pequeno" id="consultar-estado" type="button">Consultar estado</button>
-            <button class="btn pequeno" id="consultar-parametros" type="button">Consultar parámetros</button>
+          <div class="tel-cabecera">
+            <div>
+              <div class="tel-nombre" id="tel-nombre">—</div>
+              <div class="tel-sub" id="tel-sub">—</div>
+            </div>
           </div>
-          <div><label for="modo-alarma">Canal de alarma</label><select id="modo-alarma"><option value="0">Solo GPRS</option><option value="1">SMS + GPRS</option><option value="2">GPRS + SMS + llamada</option><option value="3">GPRS + llamada</option></select></div>
-          <div class="botonera">
-            <button class="btn pequeno" id="vibracion-on" type="button">Vibración ON</button>
-            <button class="btn pequeno" id="vibracion-off" type="button">Vibración OFF</button>
-            <button class="btn pequeno" id="bateria-on" type="button">Batería baja ON</button>
-            <button class="btn pequeno" id="bateria-off" type="button">Batería baja OFF</button>
+
+          <div class="tel-rejilla">
+            <div class="panel-hud tel-velocidad">
+              <h3>VELOCIDAD</h3>
+              <div class="tel-cifra"><span id="tel-velocidad">—</span><small id="tel-vel-unidad">KM/H</small></div>
+              <div class="barra"><i id="tel-vel-barra" style="width:0%"></i></div>
+              <div class="tel-nota" id="tel-vel-limite">LÍMITE: sin configurar</div>
+            </div>
+
+            <div class="panel-hud aviso-hud" id="tel-aviso" hidden>
+              <h3>ADVERTENCIA <span aria-hidden="true">⚠</span></h3>
+              <p id="tel-aviso-texto"></p>
+            </div>
+
+            <div class="panel-hud" id="tel-tarjeta-bateria">
+              <h3>BATERÍA</h3>
+              <div class="tel-cifra chica"><span id="tel-bateria-pct">—</span></div>
+              <div class="barra"><i id="tel-bateria-barra" style="width:0%"></i></div>
+              <div class="tel-nota" id="tel-bateria-etiqueta">—</div>
+            </div>
+
+            <div class="panel-hud tel-valores">
+              <h3>PARÁMETROS</h3>
+              <div class="tel-kv"><span>SATÉLITES</span><b id="tel-sat">—</b></div>
+              <div class="tel-kv"><span>RUMBO</span><b id="tel-rumbo">—</b></div>
+              <div class="tel-kv"><span>ALTITUD</span><b id="tel-altitud">—</b></div>
+              <div class="tel-kv"><span>SEÑAL GSM</span><b id="tel-senal">—</b></div>
+              <div class="tel-kv"><span>ACC</span><b id="tel-acc">—</b></div>
+              <div class="tel-kv"><span>ODÓMETRO</span><b id="tel-odometro">—</b></div>
+              <div class="tel-kv"><span>MOVIMIENTO</span><b id="tel-movimiento">—</b></div>
+              <div class="tel-kv"><span>INTERVALO</span><b id="tel-intervalo">—</b></div>
+            </div>
+
+            <div class="panel-hud tel-uplink">
+              <h3>ÚLTIMO ENLACE</h3>
+              <div class="tel-cifra chica"><span id="tel-uplink">—</span></div>
+              <div class="tel-nota" id="tel-uplink-hace">—</div>
+            </div>
           </div>
-          <div id="historial-comandos" class="vacio" style="padding:0">Sin comandos.</div>
-        </div>
+
+          <h2>REGISTRO_COMPLETO</h2>
+          <div class="detalle" id="detalle"></div>
+
+          <h2>AJUSTES_DE_UNIDAD</h2>
+          <div class="controles">
+            <div><label for="limite-velocidad">Alerta de velocidad (km/h)</label><input type="number" id="limite-velocidad" min="1" max="300" placeholder="Sin límite" /></div>
+            <div><label for="intervalo-reporte">Intervalo deseado (segundos)</label><input type="number" id="intervalo-reporte" min="10" max="86400" placeholder="Sin configurar" /></div>
+            <div class="botonera">
+              <button class="btn" id="guardar-ajustes" type="button">GUARDAR</button>
+              <button class="btn primario" id="aplicar-intervalo" type="button">APLICAR AL GPS</button>
+            </div>
+            <button class="btn peligro" id="quitar-equipo" type="button">QUITAR DE LA FLOTILLA</button>
+            <div id="info-ajustes" class="vacio" style="padding:0"></div>
+          </div>
+
+          <h2>COMANDOS_S11L</h2>
+          <div class="controles comandos">
+            <div class="botonera">
+              <button class="btn pequeno" id="consultar-estado" type="button">CONSULTAR ESTADO</button>
+              <button class="btn pequeno" id="consultar-parametros" type="button">CONSULTAR PARÁMETROS</button>
+            </div>
+            <div><label for="modo-alarma">Canal de alarma</label><select id="modo-alarma"><option value="0">Solo GPRS</option><option value="1">SMS + GPRS</option><option value="2">GPRS + SMS + llamada</option><option value="3">GPRS + llamada</option></select></div>
+            <div class="botonera">
+              <button class="btn pequeno" id="vibracion-on" type="button">VIBRACIÓN ON</button>
+              <button class="btn pequeno" id="vibracion-off" type="button">VIBRACIÓN OFF</button>
+              <button class="btn pequeno" id="bateria-on" type="button">BATERÍA BAJA ON</button>
+              <button class="btn pequeno" id="bateria-off" type="button">BATERÍA BAJA OFF</button>
+            </div>
+            <div id="historial-comandos" class="vacio" style="padding:0">Sin comandos.</div>
+          </div>
         </section>
 
+        <!-- RECORRIDO -->
         <section class="seccion" id="seccion-recorrido">
-        <h2>Recorrido</h2>
-        <div class="controles">
-          <div class="atajos">
-            <button class="btn pequeno" data-rango="1">1 h</button>
-            <button class="btn pequeno" data-rango="6">6 h</button>
-            <button class="btn pequeno" data-rango="24">24 h</button>
-            <button class="btn pequeno" data-rango="168">7 días</button>
+          <h2>RECORRIDO :: DÍA</h2>
+          <div class="controles">
+            <div class="atajos">
+              <button class="btn pequeno" data-dia="0">HOY</button>
+              <button class="btn pequeno" data-dia="1">AYER</button>
+              <button class="btn pequeno" data-dia="2">ANTIER</button>
+            </div>
+            <div><label for="dia-ruta">Día de operación</label><input type="date" id="dia-ruta" /></div>
+            <div class="botonera">
+              <button class="btn primario" id="cargar-dia" type="button">VER RUTA DEL DÍA</button>
+            </div>
+            <div id="resumen-dia" class="vacio" style="padding:0"></div>
+            <div id="dias-ruta"></div>
           </div>
-          <div>
-            <label for="desde">Desde</label>
-            <input type="datetime-local" id="desde" />
-          </div>
-          <div>
-            <label for="hasta">Hasta</label>
-            <input type="datetime-local" id="hasta" />
-          </div>
-          <div class="botonera">
-            <button class="btn primario" id="cargar-recorrido" type="button">Cargar recorrido</button>
-            <button class="btn" id="limpiar-recorrido" type="button">Limpiar</button>
-          </div>
-          <label class="check-fila"><input type="checkbox" id="ajustar-calles" checked /> Ajustar estela a calles</label>
-          <div id="info-recorrido" class="vacio" style="padding:0"></div>
-        </div>
         </section>
 
-        <details class="depuracion">
-        <summary>Integración API</summary>
-        <div class="cuerpo controles">
-          <div><label for="api-key-name">Nombre de la integración</label><input id="api-key-name" placeholder="Mi sistema" /></div>
-          <button class="btn" id="generar-api-key" type="button">Generar clave API</button>
-          <div id="api-key-result" class="vacio" style="padding:0">La clave secreta se muestra una sola vez.</div>
-        </div>
-        </details>
+        <section class="seccion" id="seccion-recorrido-rango">
+          <h2>RECORRIDO :: RANGO LIBRE</h2>
+          <div class="controles">
+            <div class="atajos">
+              <button class="btn pequeno" data-rango="1">1 h</button>
+              <button class="btn pequeno" data-rango="6">6 h</button>
+              <button class="btn pequeno" data-rango="24">24 h</button>
+              <button class="btn pequeno" data-rango="168">7 días</button>
+            </div>
+            <div><label for="desde">Desde</label><input type="datetime-local" id="desde" /></div>
+            <div><label for="hasta">Hasta</label><input type="datetime-local" id="hasta" /></div>
+            <div class="botonera">
+              <button class="btn primario" id="cargar-recorrido" type="button">CARGAR RECORRIDO</button>
+              <button class="btn" id="limpiar-recorrido" type="button">LIMPIAR</button>
+            </div>
+            <label class="check-fila"><input type="checkbox" id="ajustar-calles" checked /> Ajustar estela a calles</label>
+            <div id="info-recorrido" class="vacio" style="padding:0"></div>
+          </div>
 
-        <details class="depuracion" id="depuracion">
-        <summary>Panel de depuración</summary>
-        <div class="cuerpo" id="cuerpo-depuracion">
-          <div class="vacio" style="padding:0">Selecciona un equipo para ver su último paquete.</div>
+          <h2>RESUMEN</h2>
+          <div class="panel-hud rec-rejilla">
+            <div class="gs-celda"><span class="gs-k">PUNTOS</span><span class="gs-v" id="rec-puntos">—</span></div>
+            <div class="gs-celda"><span class="gs-k">DISTANCIA</span><span class="gs-v acento" id="rec-distancia">—</span></div>
+            <div class="gs-celda"><span class="gs-k">DURACIÓN</span><span class="gs-v" id="rec-duracion">—</span></div>
+            <div class="gs-celda"><span class="gs-k">VEL. MEDIA</span><span class="gs-v" id="rec-vel-media">—</span></div>
+            <div class="gs-celda"><span class="gs-k">VEL. MÁX</span><span class="gs-v" id="rec-vel-max">—</span></div>
+            <div class="gs-celda"><span class="gs-k">PARADAS</span><span class="gs-v ambar" id="rec-paradas">—</span></div>
+          </div>
+
+          <h2>PERFIL_DE_VELOCIDAD</h2>
+          <div class="panel-hud">
+            <svg id="perfil-velocidad" viewBox="0 0 100 32" preserveAspectRatio="none" role="img" aria-label="Perfil de velocidad del recorrido cargado">
+              <polygon id="perfil-area" points="" />
+              <polyline id="perfil-linea" points="" />
+            </svg>
+            <div class="perfil-pie"><span id="perfil-max">—</span><span id="perfil-muestras">—</span></div>
+          </div>
+
+          <h2>BITÁCORA_DEL_TRAYECTO</h2>
+          <div id="registro-recorrido"><div class="vacio">Carga un recorrido para ver su bitácora.</div></div>
+        </section>
+
+        <!-- ALERTAS -->
+        <section class="seccion" id="seccion-alertas">
+          <h2>ALERTAS_ACTIVAS</h2>
+          <div class="alertas-cab">
+            <span id="alertas-resumen">0 sin reconocer · 0 registradas</span>
+            <button class="btn pequeno" id="limpiar-alertas" type="button">RECONOCER TODAS</button>
+          </div>
+          <div id="lista-alertas"><div class="vacio">Sin alertas registradas.</div></div>
+        </section>
+
+        <!-- DIAGNÓSTICO -->
+        <section class="seccion" id="seccion-diagnostico">
+          <h2>ÚLTIMA_TRAMA_DECODIFICADA</h2>
+          <div class="cuerpo" id="cuerpo-depuracion">
+            <div class="vacio" style="padding:0">Selecciona una unidad para ver su último paquete.</div>
+          </div>
+
+          <h2>INTEGRACIÓN_API</h2>
+          <div class="controles">
+            <div><label for="api-key-name">Nombre de la integración</label><input id="api-key-name" placeholder="Mi sistema" /></div>
+            <button class="btn" id="generar-api-key" type="button">GENERAR CLAVE API</button>
+            <div id="api-key-result" class="vacio" style="padding:0">La clave secreta se muestra una sola vez.</div>
+          </div>
+        </section>
+
+        <div id="aviso-seleccion" class="vacio aviso-seleccion" hidden>
+          Selecciona una unidad en el <b>FLUJO_DE_DATOS</b> para ver sus datos.
         </div>
-        </details>
       </div>
     </aside>
 
+    <!-- ── área de mapas ────────────────────────────────────────────────── -->
     <main id="area-mapas">
       <div class="barra-mapa" aria-label="Controles de seguimiento">
         <select id="tema-mapa" aria-label="Tema del mapa">
@@ -127,20 +272,23 @@
           <option value="calles">Calles clásico</option>
         </select>
         <button class="btn pequeno" id="seguir-gps" type="button" aria-pressed="false">◎ Seguir</button>
-        <button class="btn pequeno" id="vista-3d" type="button" aria-pressed="false">◩ Vista 3D</button>
+        <button class="btn pequeno" id="vista-3d" type="button" aria-pressed="false">◎ Globo 3D</button>
         <button class="btn pequeno" id="vista-mosaico" type="button" aria-pressed="false">▦ Mosaico</button>
       </div>
+      <div class="marco-hud" aria-hidden="true"></div>
       <div id="mapa" class="superficie-mapa"></div>
       <div id="mapa-3d" class="superficie-mapa" hidden></div>
       <div id="mosaico" class="superficie-mapa mosaico" hidden></div>
     </main>
+
   </div>
 
   <nav id="navegacion-movil" aria-label="Navegación principal">
     <button type="button" data-vista-movil="mapa" class="activo" aria-current="page"><span aria-hidden="true">⌖</span><small>Mapa</small></button>
-    <button type="button" data-vista-movil="equipos"><span aria-hidden="true">●</span><small>Equipos</small></button>
-    <button type="button" data-vista-movil="gps"><span aria-hidden="true">◎</span><small>GPS</small></button>
+    <button type="button" data-vista-movil="equipos"><span aria-hidden="true">▤</span><small>Unidades</small></button>
+    <button type="button" data-vista-movil="gps"><span aria-hidden="true">◎</span><small>Telemetría</small></button>
     <button type="button" data-vista-movil="ruta"><span aria-hidden="true">⌁</span><small>Ruta</small></button>
+    <button type="button" data-vista-movil="alertas"><span aria-hidden="true">△</span><small>Alertas</small></button>
   </nav>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>

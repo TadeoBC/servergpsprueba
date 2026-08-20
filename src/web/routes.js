@@ -13,6 +13,8 @@ import {
   createOrRestoreDevice,
   archiveDevice,
 } from '../db/repo.js';
+import { obtenerRutaDelDia, listarDias, hoyLocal } from '../tracking/route-consolidator.js';
+import { isValidDate } from '../tracking/daily-routes.js';
 import { createApiKey, listApiKeys, revokeApiKey } from './api-keys.js';
 import { buildAllowedCommand, COMMAND_CATALOG, CommandValidationError } from '../commands/catalog.js';
 import { queueDeviceCommand, isDeviceOnline } from '../commands/dispatcher.js';
@@ -168,17 +170,60 @@ export function buildApiRouter() {
         limit,
         soloValidas: req.query.solo_validas === '1',
       });
-      let trace = null;
-      if (req.query.ajustar_calles === '1') {
-        trace = await buildMatchedTrace(positions, {
-          enabled: config.tracking.mapMatchEnabled,
-          baseUrl: config.tracking.mapMatchUrl,
-          timeoutMs: config.tracking.mapMatchTimeoutMs,
-          maxPoints: config.tracking.mapMatchMaxPoints,
-        });
-      }
+      // La traza se calcula siempre: aunque no se pida ajuste a calles, el
+      // cliente necesita los tramos ya separados para no dibujar una recta
+      // entre el punto donde se apagó el equipo y donde volvió a encender.
+      const trace = await buildMatchedTrace(positions, {
+        enabled: config.tracking.mapMatchEnabled && req.query.ajustar_calles === '1',
+        baseUrl: config.tracking.mapMatchUrl,
+        timeoutMs: config.tracking.mapMatchTimeoutMs,
+        maxPoints: config.tracking.mapMatchMaxPoints,
+      });
       res.json({ device, positions, limit, trace });
     } catch (err) {
+      next(err);
+    }
+  });
+
+  // ── rutas por día ─────────────────────────────────────────────────────────
+  // Los días cerrados salen de daily_routes; el día en curso se recalcula en
+  // cada consulta porque siguen entrando posiciones.
+
+  router.get('/devices/:imei/rutas', requireAuthApi, async (req, res, next) => {
+    try {
+      const device = await getDeviceByImei(req.params.imei);
+      if (!device) return res.status(404).json({ error: 'equipo no encontrado' });
+
+      const limit = Math.min(365, Math.max(1, Number(req.query.limite) || 60));
+      const dias = await listarDias(device, {
+        limit,
+        desde: req.query.desde && isValidDate(req.query.desde) ? req.query.desde : null,
+        hasta: req.query.hasta && isValidDate(req.query.hasta) ? req.query.hasta : null,
+      });
+
+      // El día de hoy puede no estar todavía en la tabla; se anuncia siempre
+      // para que la interfaz lo pueda seleccionar desde el primer momento.
+      const hoy = hoyLocal();
+      if (!dias.some((d) => d.fecha === hoy)) dias.unshift({ fecha: hoy, cerrada: false, en_curso: true });
+
+      res.json({ device, zona_horaria: config.rutas.zonaHoraria, hoy, dias });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.get('/devices/:imei/rutas/:fecha', requireAuthApi, async (req, res, next) => {
+    try {
+      const device = await getDeviceByImei(req.params.imei);
+      if (!device) return res.status(404).json({ error: 'equipo no encontrado' });
+      if (!isValidDate(req.params.fecha)) {
+        return res.status(400).json({ error: 'fecha inválida, se espera AAAA-MM-DD' });
+      }
+
+      const ruta = await obtenerRutaDelDia(device, req.params.fecha, { forzar: req.query.recalcular === '1' });
+      res.json({ device, hoy: hoyLocal(), ruta });
+    } catch (err) {
+      if (err.statusCode === 400) return res.status(400).json({ error: err.message });
       next(err);
     }
   });

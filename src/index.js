@@ -6,6 +6,7 @@ import { startTcpServer } from './tcp/server.js';
 import { startHttpServer } from './web/app.js';
 import { attachWebSocket } from './web/ws.js';
 import { auditarConfiguracion } from './web/auth.js';
+import { iniciarConsolidadorDiario } from './tracking/route-consolidator.js';
 
 async function main() {
   logger.info(
@@ -28,10 +29,15 @@ async function main() {
   attachWebSocket(httpServer);
   const tcpServer = await startTcpServer();
 
-  logger.info('todo arriba: ingesta TCP + API + WebSocket');
+  // Congela los recorridos de los días ya terminados. Al arrancar recupera lo
+  // que haya quedado pendiente si el servicio estuvo caído.
+  const detenerConsolidador = iniciarConsolidadorDiario();
+
+  logger.info('todo arriba: ingesta TCP + API + WebSocket + rutas diarias');
 
   const apagar = async (senal) => {
     logger.info({ senal }, 'apagando de forma ordenada');
+    detenerConsolidador();
     const cierres = [
       new Promise((r) => tcpServer.close(r)),
       new Promise((r) => httpServer.close(r)),

@@ -242,32 +242,44 @@ export async function insertEvent({ deviceId = null, tipo, positionId = null, ra
   return rows[0];
 }
 
-/** Lista de equipos con su última posición conocida (con o sin fix). */
+/**
+ * Lista de equipos con su última posición conocida (con o sin fix).
+ *
+ * Una sola consulta para toda la flotilla: el LATERAL trae los últimos tres
+ * fixes de cada equipo y el estado de movimiento se calcula aquí. La versión
+ * anterior lanzaba un SELECT extra POR EQUIPO (getCurrentMovementState), así
+ * que con una flotilla de verdad el panel hacía N+1 consultas cada vez que se
+ * refrescaba la lista.
+ */
 export async function listDevicesWithLastPosition() {
   const { rows } = await query(`
     SELECT d.id, d.imei, d.alias, d.placa, d.activo, d.archived_at, d.last_seen_at, d.created_at,
            d.speed_limit_kmh, d.report_interval_seconds, d.telemetry, d.telemetry_updated_at,
-           p.id           AS position_id,
-           ST_Y(p.geom::geometry) AS latitude,
-           ST_X(p.geom::geometry) AS longitude,
-           p.speed_kmh, p.course, p.altitude, p.satellites, p.valid,
-           p.device_time, p.server_time, p.protocol, p.attributes, p.raw_hex
+           p.ultimas
     FROM devices d
     LEFT JOIN LATERAL (
-      SELECT * FROM positions
-      WHERE device_id = d.id AND geom IS NOT NULL AND valid = true
-      ORDER BY server_time DESC, id DESC
-      LIMIT 1
+      SELECT json_agg(u ORDER BY u.server_time ASC, u.id ASC) AS ultimas
+      FROM (
+        SELECT id, speed_kmh, course, altitude, satellites, valid,
+               device_time, server_time, protocol, attributes, raw_hex,
+               ST_Y(geom::geometry) AS latitude,
+               ST_X(geom::geometry) AS longitude
+        FROM positions
+        WHERE device_id = d.id AND geom IS NOT NULL AND valid = true
+        ORDER BY server_time DESC, id DESC
+        LIMIT 3
+      ) u
     ) p ON true
     WHERE d.archived_at IS NULL
     ORDER BY d.alias NULLS LAST, d.imei
   `);
-  const devices = rows.map(shapeDeviceRow);
-  await Promise.all(devices.map(async (device) => {
-    if (!device.last_position) return;
-    Object.assign(device.last_position, await getCurrentMovementState(device.id));
-  }));
-  return devices;
+
+  return rows.map((row) => {
+    const ultimas = row.ultimas ?? [];
+    const device = shapeDeviceRow(row, ultimas.at(-1) ?? null);
+    if (device.last_position) Object.assign(device.last_position, currentMovementState(ultimas));
+    return device;
+  });
 }
 
 export async function getDeviceByImei(imei) {
@@ -406,7 +418,7 @@ export async function listPositions(deviceId, { desde = null, hasta = null, limi
   return annotateMovementStates(rows.reverse());
 }
 
-function shapeDeviceRow(r) {
+function shapeDeviceRow(r, position = null) {
   return {
     id: r.id,
     imei: r.imei,
@@ -420,22 +432,133 @@ function shapeDeviceRow(r) {
     telemetry_updated_at: r.telemetry_updated_at,
     last_seen_at: r.last_seen_at,
     created_at: r.created_at,
-    last_position: r.position_id
+    last_position: position
       ? {
-          id: r.position_id,
-          latitude: r.latitude,
-          longitude: r.longitude,
-          speed_kmh: r.speed_kmh,
-          course: r.course,
-          altitude: r.altitude,
-          satellites: r.satellites,
-          valid: r.valid,
-          device_time: r.device_time,
-          server_time: r.server_time,
-          protocol: r.protocol,
-          attributes: r.attributes,
-          raw_hex: r.raw_hex,
+          id: position.id,
+          latitude: position.latitude,
+          longitude: position.longitude,
+          speed_kmh: position.speed_kmh,
+          course: position.course,
+          altitude: position.altitude,
+          satellites: position.satellites,
+          valid: position.valid,
+          device_time: position.device_time,
+          server_time: position.server_time,
+          protocol: position.protocol,
+          attributes: position.attributes,
+          raw_hex: position.raw_hex,
         }
       : null,
   };
+}
+
+// ── rutas diarias ────────────────────────────────────────────────────────────
+
+// La geometría llega como WKT MultiLineString y se guarda ya proyectada a 4326.
+// `cerrada` marca los días que ya no van a cambiar: el día en curso se
+// reescribe en cada consulta, los anteriores se congelan una sola vez.
+export async function upsertDailyRoute(route, { cerrada = false } = {}) {
+  const { rows } = await query(
+    `INSERT INTO daily_routes
+       (device_id, fecha, zona_horaria, geom, distancia_km, puntos, tramos, paradas,
+        velocidad_max_kmh, primer_punto, ultimo_punto, ajustada_calles, cerrada, resumen, generada_en)
+     VALUES ($1, $2, $3, ST_GeomFromEWKT($4), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now())
+     ON CONFLICT (device_id, fecha) DO UPDATE SET
+       zona_horaria = EXCLUDED.zona_horaria,
+       geom = EXCLUDED.geom,
+       distancia_km = EXCLUDED.distancia_km,
+       puntos = EXCLUDED.puntos,
+       tramos = EXCLUDED.tramos,
+       paradas = EXCLUDED.paradas,
+       velocidad_max_kmh = EXCLUDED.velocidad_max_kmh,
+       primer_punto = EXCLUDED.primer_punto,
+       ultimo_punto = EXCLUDED.ultimo_punto,
+       ajustada_calles = EXCLUDED.ajustada_calles,
+       cerrada = EXCLUDED.cerrada,
+       resumen = EXCLUDED.resumen,
+       generada_en = now()
+     RETURNING id, cerrada`,
+    [
+      route.device_id, route.fecha, route.zona_horaria, route.wkt,
+      route.distancia_km, route.puntos, route.tramos, route.paradas,
+      route.velocidad_max_kmh, route.primer_punto, route.ultimo_punto,
+      route.ajustada_calles, cerrada, JSON.stringify(route.resumen ?? {}),
+    ],
+  );
+  return rows[0] ?? null;
+}
+
+function shapeDailyRoute(r) {
+  return {
+    fecha: r.fecha instanceof Date ? r.fecha.toISOString().slice(0, 10) : String(r.fecha).slice(0, 10),
+    zona_horaria: r.zona_horaria,
+    distancia_km: r.distancia_km,
+    puntos: r.puntos,
+    tramos: r.tramos,
+    paradas: r.paradas,
+    velocidad_max_kmh: r.velocidad_max_kmh,
+    primer_punto: r.primer_punto,
+    ultimo_punto: r.ultimo_punto,
+    ajustada_calles: r.ajustada_calles,
+    cerrada: r.cerrada,
+    resumen: r.resumen ?? {},
+    generada_en: r.generada_en,
+    // Los tramos vuelven como [[lat, lon], ...] para que el mapa los dibuje sin
+    // transformar nada; PostGIS entrega lon/lat y aquí se invierte.
+    segments: (r.segments ?? []).map((linea) => linea.map(([lon, lat]) => [lat, lon])),
+  };
+}
+
+const DAILY_ROUTE_COLUMNS = `fecha, zona_horaria, distancia_km, puntos, tramos, paradas,
+         velocidad_max_kmh, primer_punto, ultimo_punto, ajustada_calles, cerrada, resumen, generada_en`;
+
+export async function getDailyRoute(deviceId, fecha) {
+  const { rows } = await query(
+    `SELECT ${DAILY_ROUTE_COLUMNS},
+            -- En un MultiLineString el arreglo 'coordinates' de GeoJSON ya es
+            -- la lista de tramos, así que no hace falta desarmar la geometría.
+            COALESCE(ST_AsGeoJSON(geom)::jsonb -> 'coordinates', '[]'::jsonb) AS segments
+     FROM daily_routes WHERE device_id = $1 AND fecha = $2`,
+    [deviceId, fecha],
+  );
+  return rows[0] ? shapeDailyRoute(rows[0]) : null;
+}
+
+// El listado de días es para el selector de la interfaz: sin geometría, que
+// pesa mucho y no se dibuja hasta que el usuario elige un día.
+export async function listDailyRoutes(deviceId, { limit = 60, desde = null, hasta = null } = {}) {
+  const params = [deviceId];
+  const where = ['device_id = $1'];
+  if (desde) { params.push(desde); where.push(`fecha >= $${params.length}`); }
+  if (hasta) { params.push(hasta); where.push(`fecha <= $${params.length}`); }
+  params.push(limit);
+  const { rows } = await query(
+    `SELECT ${DAILY_ROUTE_COLUMNS}
+     FROM daily_routes WHERE ${where.join(' AND ')}
+     ORDER BY fecha DESC LIMIT $${params.length}`,
+    params,
+  );
+  return rows.map((r) => ({ ...shapeDailyRoute(r), segments: undefined }));
+}
+
+/** Equipos con posiciones en un rango: a quiénes hay que consolidarles el día. */
+export async function listDevicesWithPositionsBetween(desde, hasta) {
+  const { rows } = await query(
+    `SELECT DISTINCT d.id, d.imei, d.alias
+     FROM devices d
+     JOIN positions p ON p.device_id = d.id
+     WHERE COALESCE(p.device_time, p.server_time) >= $1
+       AND COALESCE(p.device_time, p.server_time) <= $2`,
+    [desde, hasta],
+  );
+  return rows;
+}
+
+/** ¿Ya quedó cerrado ese día para ese equipo? Evita recalcular en cada barrido. */
+export async function dailyRouteIsClosed(deviceId, fecha) {
+  const { rows } = await query(
+    'SELECT cerrada FROM daily_routes WHERE device_id = $1 AND fecha = $2',
+    [deviceId, fecha],
+  );
+  return rows[0]?.cerrada === true;
 }

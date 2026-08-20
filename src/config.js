@@ -78,6 +78,20 @@ export const config = {
     mapMatchMaxPoints: int('MAP_MATCH_MAX_POINTS', 400),
   },
 
+  rutas: {
+    // La jornada se corta a la medianoche LOCAL del operador. Si la flotilla
+    // cambia de región, esto es lo único que hay que mover.
+    zonaHoraria: str('ROUTE_TIMEZONE', 'America/Mexico_City'),
+    // Cada cuánto revisa el consolidador si quedaron días sin cerrar.
+    consolidarCadaMs: int('ROUTE_CONSOLIDATE_INTERVAL_MS', 3600000),
+    // Margen tras la medianoche antes de congelar el día: deja entrar los
+    // búferes de equipos que estuvieron sin señal al final de la jornada.
+    margenCierreMinutos: int('ROUTE_CLOSE_GRACE_MINUTES', 90),
+    // Cuántos días hacia atrás intenta rellenar al arrancar.
+    diasRelleno: int('ROUTE_BACKFILL_DAYS', 7),
+    maxPuntosPorDia: int('ROUTE_MAX_POINTS_PER_DAY', 20000),
+  },
+
   log: {
     level: str('LOG_LEVEL', 'info'),
     pretty: bool('LOG_PRETTY', false),

@@ -8,3 +8,10 @@ caddy_data/
 caddy_config/
 pg_data/
 tmp/
+
+# Respaldos que genera deploy.sh y las actualizaciones manuales: incluyen dumps
+# de la base con posiciones reales, así que nunca deben salir del servidor.
+deploy-backups/
+*.bak.*
+# Restos de recursos de macOS al copiar por red.
+._*
