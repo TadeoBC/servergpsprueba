@@ -163,3 +163,39 @@ test('un trayecto en marcha no pierde ningún punto al colapsar paradas', () => 
   const marcha = Array.from({ length: 8 }, (_, i) => p(20.39 + i * 0.0009, -99.99, i * 15, { id: i + 1 }));
   assert.equal(collapseStops(marcha).length, marcha.length);
 });
+
+test('si el motor de rutas está caído se deja de insistir en cada trozo', async () => {
+  // Traza larga: sin corte temprano se consultaría trozo a trozo hasta agotar
+  // el tiempo total, y el usuario esperaría el timeout entero para ver la
+  // estela cruda que ya se podía dibujar desde el primer fallo.
+  let intentos = 0;
+  const fakeFetch = async () => {
+    intentos++;
+    throw new Error('fetch failed');
+  };
+  const puntos = Array.from({ length: 300 }, (_, i) => p(20.39 + i * 0.0005, -99.99, i * 15, { id: i + 1 }));
+
+  const resultado = await buildMatchedTrace(puntos, { fetchImpl: fakeFetch });
+
+  assert.equal(resultado.matched, false);
+  assert.ok(resultado.segments.length >= 1, 'debe devolver igualmente la estela del GPS');
+  // Dos intentos (match y route) sobre el primer trozo bastan para concluirlo.
+  assert.equal(intentos, 2, `esperaba rendirse tras 2 intentos, hizo ${intentos}`);
+});
+
+test('un tramo sin cobertura vial no se confunde con el motor caído', async () => {
+  // NoMatch es una respuesta legítima del servicio: hay que seguir probando el
+  // resto de la traza, no darla por perdida.
+  let intentos = 0;
+  const fakeFetch = async (url) => {
+    intentos++;
+    return url.includes('/match/')
+      ? { ok: true, json: async () => ({ code: 'NoMatch', message: 'No matchings found' }) }
+      : { ok: true, json: async () => ({ code: 'NoRoute', message: 'No route found' }) };
+  };
+  const puntos = Array.from({ length: 300 }, (_, i) => p(20.39 + i * 0.0005, -99.99, i * 15, { id: i + 1 }));
+
+  await buildMatchedTrace(puntos, { fetchImpl: fakeFetch });
+
+  assert.ok(intentos > 2, `debe seguir intentando los demás trozos, hizo ${intentos}`);
+});

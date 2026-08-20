@@ -49,6 +49,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      osrm:
+        condition: service_started
     environment:
       NODE_ENV: production
       POSTGRES_HOST: db
@@ -128,6 +130,30 @@ services:
       retries: 3
     mem_limit: 256m
     cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Motor de rutas propio. Sustituye al servidor público de demostración de
+  # OSRM: sin cuota, sin latencia de red y sin depender de que un tercero esté
+  # disponible. Sirve solo la zona de operación recortada, que es lo que cabe
+  # en la memoria de esta máquina.
+  #
+  # El grafo se prepara aparte con /opt/osrm/procesar.sh y se monta de solo
+  # lectura: este contenedor únicamente responde consultas.
+  osrm:
+    image: ghcr.io/project-osrm/osrm-backend:latest
+    restart: unless-stopped
+    command: >
+      osrm-routed --algorithm mld --max-matching-size 300 /data/zona.osrm
+    volumes:
+      - /opt/osrm/data:/data:ro
+    expose:
+      - "5000"
+    mem_limit: 900m
+    cpus: 1.0
     logging:
       driver: json-file
       options:

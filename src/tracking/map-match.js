@@ -11,6 +11,12 @@ const STOP_CLUSTER_METERS = 20;
 const BEARING_TOLERANCE = 35;
 // Por debajo de esta velocidad el rumbo que reporta el equipo es ruido.
 const BEARING_MIN_KMH = 5;
+// Tope de cada consulta, aparte del tiempo total. Sin él, con el motor caído la
+// primera petición se comía el deadline entero y el corte temprano no llegaba a
+// actuar: el usuario esperaba el timeout completo para ver la estela cruda.
+// Contra el motor local una consulta tarda decenas de milisegundos, así que
+// esto es dos órdenes de magnitud de margen.
+const REQUEST_TIMEOUT_MS = 2500;
 
 /** Distancia Haversine entre dos posiciones GPS. */
 export function distanceMeters(a, b) {
@@ -287,6 +293,15 @@ async function routeChunk(points, { baseUrl, timeoutMs, fetchImpl }) {
 }
 
 /**
+ * ¿El fallo es "no hay quien conteste" y no "esta traza no casa con ninguna
+ * calle"? Solo lo primero justifica dejar de consultar el resto de la traza.
+ */
+function esMotorInalcanzable(error) {
+  const mensaje = String(error?.message ?? '').toLowerCase();
+  return /fetch failed|econnrefused|enotfound|eai_again|econnreset|network|socket|timeout|abort|agotado|getaddrinfo/.test(mensaje);
+}
+
+/**
  * Ajusta la estela a calles. Devuelve fallback local ante timeout, falta de
  * cobertura vial o cualquier error del proveedor.
  */
@@ -296,6 +311,7 @@ export async function buildMatchedTrace(positions, {
   timeoutMs = 5000,
   maxPoints = DEFAULT_MAX_POINTS,
   splitOptions = {},
+  requestTimeoutMs = REQUEST_TIMEOUT_MS,
   fetchImpl = fetch,
 } = {}) {
   const filtered = filterGpsTrace(positions, { maxPoints });
@@ -315,6 +331,12 @@ export async function buildMatchedTrace(positions, {
   const deadline = Date.now() + timeoutMs;
   // Secuencial a propósito: el servidor público de demostración no debe
   // recibir ráfagas paralelas desde nuestra aplicación.
+  // Si el motor de rutas no está disponible, seguir intentando trozo a trozo
+  // solo consigue agotar el tiempo total y hacer esperar al usuario hasta el
+  // último milisegundo. En cuanto se confirma que está caído se deja de
+  // insistir y se devuelve la estela del GPS, que es el respaldo correcto.
+  let motorCaido = false;
+
   for (const group of groups) {
     if (group.length < 2) {
       segments.push(rawCoordinates(group));
@@ -323,10 +345,14 @@ export async function buildMatchedTrace(positions, {
     // Las paradas se colapsan solo para consultar: los pulsos completos se
     // conservan para la lista, las métricas y el heredado del ajuste.
     for (const chunk of chunksWithOverlap(collapseStops(group))) {
+      if (motorCaido) {
+        segments.push(rawCoordinates(chunk));
+        continue;
+      }
       try {
         const remainingMs = deadline - Date.now();
         if (remainingMs < 100) throw new Error('tiempo total de ajuste agotado');
-        const matched = await matchChunk(chunk, { baseUrl, timeoutMs: remainingMs, fetchImpl });
+        const matched = await matchChunk(chunk, { baseUrl, timeoutMs: Math.min(remainingMs, requestTimeoutMs), fetchImpl });
         if (!matched.segments.length) throw new Error('OSRM no encontró segmentos viales');
         segments.push(...matched.segments);
         for (const point of matched.snappedPoints) snappedPoints.set(point.id, point);
@@ -335,13 +361,16 @@ export async function buildMatchedTrace(positions, {
         try {
           const remainingMs = deadline - Date.now();
           if (remainingMs < 100) throw new Error('tiempo total de ajuste agotado');
-          const routed = await routeChunk(chunk, { baseUrl, timeoutMs: remainingMs, fetchImpl });
+          const routed = await routeChunk(chunk, { baseUrl, timeoutMs: Math.min(remainingMs, requestTimeoutMs), fetchImpl });
           segments.push(...routed.segments);
           for (const point of routed.snappedPoints) snappedPoints.set(point.id, point);
           routedChunks++;
         } catch (routeError) {
           segments.push(rawCoordinates(chunk));
           errors.push(`${err.message}; ${routeError.message}`);
+          // Que un tramo concreto no case con ninguna calle es normal y no dice
+          // nada del motor. Que no se pueda ni conectar, sí.
+          if (esMotorInalcanzable(err) && esMotorInalcanzable(routeError)) motorCaido = true;
         }
       }
     }
