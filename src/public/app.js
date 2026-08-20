@@ -247,6 +247,22 @@ function configurarInterfazMovil() {
   // mapa aparecía como un recuadro descolocado dentro de su contenedor.
   window.addEventListener('resize', programarResizeMapas);
 
+  // Cruzar el umbral de anclado deja restos del otro modo: un panel anclado con
+  // la clase del flotante, o al revés, y el tablero desaparece sin motivo.
+  window.matchMedia('(min-width: 1280px)').addEventListener('change', (e) => {
+    const sidebar = document.getElementById('sidebar');
+    if (e.matches) {
+      sidebar.classList.remove('abierto');
+      document.body.classList.remove('panel-plegado');
+    } else {
+      document.body.classList.remove('panel-plegado');
+      sidebar.classList.toggle('abierto', estado.vista !== 'mapa');
+    }
+    document.getElementById('mostrar-panel')
+      .setAttribute('aria-expanded', String(e.matches || estado.vista !== 'mapa'));
+    programarResizeMapas();
+  });
+
   // El contenedor del mapa también cambia sin que cambie la ventana: al abrir o
   // cerrar el panel lateral y al pasar de una vista a otra, porque cada una
   // tiene su propio ancho. Observarlo cubre todos esos casos de una vez.
@@ -254,6 +270,16 @@ function configurarInterfazMovil() {
   if (areaMapas && typeof ResizeObserver === 'function') {
     new ResizeObserver(programarResizeMapas).observe(areaMapas);
   }
+}
+
+/**
+ * ¿El panel ocupa su propia columna en vez de flotar sobre el mapa?
+ * A partir de 1280 px está anclado y no debe cerrarse solo: el usuario lo
+ * pliega y lo despliega cuando quiere, y si no, se queda donde está.
+ * El umbral es el mismo que usa la hoja de estilos.
+ */
+function panelAnclado() {
+  return window.matchMedia('(min-width: 1280px)').matches;
 }
 
 function cambiarVista(vista) {
@@ -268,10 +294,14 @@ function cambiarVista(vista) {
     if (activo) button.setAttribute('aria-current', 'page');
     else button.removeAttribute('aria-current');
   });
-  if (!esMovil()) {
+  if (!esMovil() && !panelAnclado()) {
     const panel = document.getElementById('sidebar');
     panel.classList.toggle('abierto', vista !== 'mapa');
     document.getElementById('mostrar-panel').setAttribute('aria-expanded', String(vista !== 'mapa'));
+  } else if (panelAnclado()) {
+    // Anclado siempre visible salvo que se haya plegado a mano.
+    document.getElementById('mostrar-panel')
+      .setAttribute('aria-expanded', String(!document.body.classList.contains('panel-plegado')));
   }
   const aviso = document.getElementById('aviso-seleccion');
   aviso.hidden = !((vista === 'telemetria' || vista === 'recorrido') && !estado.seleccionado);
@@ -2114,7 +2144,7 @@ async function iniciar() {
   document.querySelectorAll('button[data-vista]').forEach((button) => {
     button.addEventListener('click', () => {
       const sidebar = document.getElementById('sidebar');
-      if (!esMovil() && button.dataset.vista === estado.vista && button.dataset.vista !== 'mapa' && sidebar.classList.contains('abierto')) {
+      if (!esMovil() && !panelAnclado() && button.dataset.vista === estado.vista && button.dataset.vista !== 'mapa' && sidebar.classList.contains('abierto')) {
         sidebar.classList.remove('abierto');
         document.getElementById('mostrar-panel').setAttribute('aria-expanded', 'false');
         programarResizeMapas();
@@ -2227,9 +2257,14 @@ async function iniciar() {
 
   document.getElementById('mostrar-panel').addEventListener('click', () => {
     const sidebar = document.getElementById('sidebar');
-    const open = !sidebar.classList.contains('abierto');
-    sidebar.classList.toggle('abierto', open);
-    document.getElementById('mostrar-panel').setAttribute('aria-expanded', String(open));
+    let visible;
+    if (panelAnclado()) {
+      visible = document.body.classList.toggle('panel-plegado') === false;
+    } else {
+      visible = !sidebar.classList.contains('abierto');
+      sidebar.classList.toggle('abierto', visible);
+    }
+    document.getElementById('mostrar-panel').setAttribute('aria-expanded', String(visible));
     programarResizeMapas();
   });
 
@@ -2276,6 +2311,10 @@ async function iniciar() {
       const open = !sidebar.classList.contains('abierto');
       if (open) mostrarVistaMovil(estado.seleccionado ? 'gps' : 'equipos');
       else actualizarPanelMovil(false);
+    } else if (panelAnclado()) {
+      document.body.classList.add('panel-plegado');
+      document.getElementById('mostrar-panel').setAttribute('aria-expanded', 'false');
+      programarResizeMapas();
     } else {
       sidebar.classList.remove('abierto');
       document.getElementById('mostrar-panel').setAttribute('aria-expanded', 'false');
