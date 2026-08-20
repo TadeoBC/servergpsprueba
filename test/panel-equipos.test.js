@@ -79,3 +79,29 @@ test('la estela viva se corta donde el equipo dejó de reportar', () => {
   }
   assert.ok(app.includes("geometry: { type: 'MultiLineString'"), 'el 3D debe dibujar tramos separados');
 });
+
+test('el panel lateral flota sobre el mapa y conserva su animación', () => {
+  // Es la estética elegida para el escritorio: un panel que se desliza sobre el
+  // mapa, no una columna fija. Anclarlo se probó y no gustó.
+  const bloque = css.slice(css.indexOf('@media (min-width: 821px)'));
+  const hasta = bloque.slice(0, bloque.indexOf('\n}\n'));
+  assert.match(hasta, /#sidebar\s*\{[^}]*position:\s*absolute/);
+  assert.match(hasta, /transition:\s*transform/);
+  assert.match(hasta, /#sidebar\.abierto\s*\{[^}]*transform:\s*translateX\(0\)/);
+});
+
+test('el tablero no se abre ni se cierra solo al cambiar de pestaña', () => {
+  // El fallo original: en la vista de mapa se cerraba y en las demás se abría,
+  // así que parecía ir y venir por su cuenta. Ahora manda la preferencia.
+  assert.match(app, /const abierto = panelPreferido\(\);/);
+  assert.ok(!app.includes("panel.classList.toggle('abierto', vista !== 'mapa')"),
+    'la visibilidad no debe depender de la vista');
+});
+
+test('la preferencia del panel sobrevive al recargar', () => {
+  assert.match(app, /const CLAVE_PANEL = 'atlyx_panel_abierto';/);
+  assert.match(app, /function panelPreferido\(\)/);
+  assert.match(app, /function recordarPanel\(abierto\)/);
+  // Abrirlo y cerrarlo debe registrarse; si no, se pierde al navegar.
+  assert.ok((app.match(/recordarPanel\(/g) ?? []).length >= 4, 'faltan puntos donde se recuerda la elección');
+});

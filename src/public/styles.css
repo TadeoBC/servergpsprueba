@@ -1253,48 +1253,6 @@ body.login { display: block; overflow: auto; }
   .tel-velocidad, .tel-valores { grid-column: span 1; }
 }
 
-/* ── panel anclado en pantallas anchas ──────────────────────────────────────
-   Entre 821 y 1279 px el panel flota sobre el mapa y se desliza, porque el
-   espacio no da para tenerlo siempre a la vista. A partir de 1280 px sí sobra
-   sitio, y ahí flotar era un estorbo: el panel arrancaba oculto en la vista de
-   mapa, aparecía al cambiar de pestaña y se volvía a cerrar al repulsarla, con
-   lo que el tablero parecía ir y venir solo.
-
-   Anclado ocupa su columna y se queda quieto. Se puede plegar a voluntad con el
-   botón PANEL, pero ya no se cierra por su cuenta. */
-@media (min-width: 1280px) {
-  #app {
-    display: grid;
-    grid-template-columns: min(var(--panel-ancho), 42vw) minmax(0, 1fr);
-  }
-
-  #area-mapas { position: relative; inset: auto; }
-
-  #sidebar {
-    position: relative;
-    top: auto;
-    left: auto;
-    bottom: auto;
-    width: auto;
-    transform: none;
-    opacity: 1;
-    pointer-events: auto;
-    border: none;
-    border-right: 1px solid var(--borde);
-    border-radius: 0;
-    box-shadow: none;
-    backdrop-filter: none;
-    transition: none;
-  }
-
-  /* Plegado explícito por el usuario: el mapa se queda con todo el ancho.
-     La rejilla pasa a una sola columna a propósito; dejarla en dos con la
-     primera a cero metía el mapa en la columna vacía y lo hacía desaparecer,
-     porque al ocultar el panel solo queda un hijo que colocar. */
-  body.panel-plegado #app { grid-template-columns: minmax(0, 1fr); }
-  body.panel-plegado #sidebar { display: none; }
-}
-
 @media (min-width: 821px) and (max-width: 1180px) {
   #barra-superior { gap: 7px; }
   .buscador { display: none; }

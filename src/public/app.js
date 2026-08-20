@@ -247,21 +247,6 @@ function configurarInterfazMovil() {
   // mapa aparecía como un recuadro descolocado dentro de su contenedor.
   window.addEventListener('resize', programarResizeMapas);
 
-  // Cruzar el umbral de anclado deja restos del otro modo: un panel anclado con
-  // la clase del flotante, o al revés, y el tablero desaparece sin motivo.
-  window.matchMedia('(min-width: 1280px)').addEventListener('change', (e) => {
-    const sidebar = document.getElementById('sidebar');
-    if (e.matches) {
-      sidebar.classList.remove('abierto');
-      document.body.classList.remove('panel-plegado');
-    } else {
-      document.body.classList.remove('panel-plegado');
-      sidebar.classList.toggle('abierto', estado.vista !== 'mapa');
-    }
-    document.getElementById('mostrar-panel')
-      .setAttribute('aria-expanded', String(e.matches || estado.vista !== 'mapa'));
-    programarResizeMapas();
-  });
 
   // El contenedor del mapa también cambia sin que cambie la ventana: al abrir o
   // cerrar el panel lateral y al pasar de una vista a otra, porque cada una
@@ -272,14 +257,18 @@ function configurarInterfazMovil() {
   }
 }
 
-/**
- * ¿El panel ocupa su propia columna en vez de flotar sobre el mapa?
- * A partir de 1280 px está anclado y no debe cerrarse solo: el usuario lo
- * pliega y lo despliega cuando quiere, y si no, se queda donde está.
- * El umbral es el mismo que usa la hoja de estilos.
- */
-function panelAnclado() {
-  return window.matchMedia('(min-width: 1280px)').matches;
+// El panel es flotante y se desliza sobre el mapa. Que esté desplegado o no es
+// una preferencia del usuario, no algo que dependa de la pestaña abierta, así
+// que se recuerda entre sesiones. Por omisión aparece: si no, el tablero queda
+// escondido y no hay forma de saber que existe.
+const CLAVE_PANEL = 'atlyx_panel_abierto';
+
+function panelPreferido() {
+  return localStorage.getItem(CLAVE_PANEL) !== '0';
+}
+
+function recordarPanel(abierto) {
+  localStorage.setItem(CLAVE_PANEL, abierto ? '1' : '0');
 }
 
 function cambiarVista(vista) {
@@ -294,14 +283,15 @@ function cambiarVista(vista) {
     if (activo) button.setAttribute('aria-current', 'page');
     else button.removeAttribute('aria-current');
   });
-  if (!esMovil() && !panelAnclado()) {
+  if (!esMovil()) {
+    // El panel flota sobre el mapa, pero la decisión de tenerlo a la vista es
+    // del usuario y se respeta al cambiar de pestaña. Antes se cerraba solo en
+    // la vista de mapa y volvía a abrirse en las demás, y el tablero parecía ir
+    // y venir por su cuenta.
     const panel = document.getElementById('sidebar');
-    panel.classList.toggle('abierto', vista !== 'mapa');
-    document.getElementById('mostrar-panel').setAttribute('aria-expanded', String(vista !== 'mapa'));
-  } else if (panelAnclado()) {
-    // Anclado siempre visible salvo que se haya plegado a mano.
-    document.getElementById('mostrar-panel')
-      .setAttribute('aria-expanded', String(!document.body.classList.contains('panel-plegado')));
+    const abierto = panelPreferido();
+    panel.classList.toggle('abierto', abierto);
+    document.getElementById('mostrar-panel').setAttribute('aria-expanded', String(abierto));
   }
   const aviso = document.getElementById('aviso-seleccion');
   aviso.hidden = !((vista === 'telemetria' || vista === 'recorrido') && !estado.seleccionado);
@@ -2144,8 +2134,9 @@ async function iniciar() {
   document.querySelectorAll('button[data-vista]').forEach((button) => {
     button.addEventListener('click', () => {
       const sidebar = document.getElementById('sidebar');
-      if (!esMovil() && !panelAnclado() && button.dataset.vista === estado.vista && button.dataset.vista !== 'mapa' && sidebar.classList.contains('abierto')) {
+      if (!esMovil() && button.dataset.vista === estado.vista && sidebar.classList.contains('abierto')) {
         sidebar.classList.remove('abierto');
+        recordarPanel(false);
         document.getElementById('mostrar-panel').setAttribute('aria-expanded', 'false');
         programarResizeMapas();
         return;
@@ -2257,13 +2248,9 @@ async function iniciar() {
 
   document.getElementById('mostrar-panel').addEventListener('click', () => {
     const sidebar = document.getElementById('sidebar');
-    let visible;
-    if (panelAnclado()) {
-      visible = document.body.classList.toggle('panel-plegado') === false;
-    } else {
-      visible = !sidebar.classList.contains('abierto');
-      sidebar.classList.toggle('abierto', visible);
-    }
+    const visible = !sidebar.classList.contains('abierto');
+    sidebar.classList.toggle('abierto', visible);
+    recordarPanel(visible);
     document.getElementById('mostrar-panel').setAttribute('aria-expanded', String(visible));
     programarResizeMapas();
   });
@@ -2311,12 +2298,9 @@ async function iniciar() {
       const open = !sidebar.classList.contains('abierto');
       if (open) mostrarVistaMovil(estado.seleccionado ? 'gps' : 'equipos');
       else actualizarPanelMovil(false);
-    } else if (panelAnclado()) {
-      document.body.classList.add('panel-plegado');
-      document.getElementById('mostrar-panel').setAttribute('aria-expanded', 'false');
-      programarResizeMapas();
     } else {
       sidebar.classList.remove('abierto');
+      recordarPanel(false);
       document.getElementById('mostrar-panel').setAttribute('aria-expanded', 'false');
       programarResizeMapas();
     }
