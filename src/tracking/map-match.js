@@ -1,6 +1,16 @@
 const EARTH_RADIUS_M = 6371008.8;
 const DEFAULT_MAX_POINTS = 400;
-const MAX_CHUNK_POINTS = 40;
+// El servicio público de OSRM acepta hasta 100 coordenadas por consulta de
+// match. Trozos más largos dan al motor más contexto y menos costuras.
+const MAX_CHUNK_POINTS = 100;
+const CHUNK_OVERLAP = 5;
+// Radio dentro del cual se considera que la unidad no se movió, solo derivó.
+const STOP_CLUSTER_METERS = 20;
+// Tolerancia angular del rumbo. Con 60° cabía la calle en sentido contrario;
+// 35° obliga a respetar el sentido de circulación sin descartar curvas suaves.
+const BEARING_TOLERANCE = 35;
+// Por debajo de esta velocidad el rumbo que reporta el equipo es ruido.
+const BEARING_MIN_KMH = 5;
 
 /** Distancia Haversine entre dos posiciones GPS. */
 export function distanceMeters(a, b) {
@@ -127,14 +137,101 @@ export function splitTrace(points, options = {}) {
   return groups;
 }
 
-function chunksWithOverlap(points, size = MAX_CHUNK_POINTS) {
+/**
+ * Divide un tramo en peticiones para OSRM.
+ *
+ * El solape importa: con un solo punto en común, cada trozo se resolvía casi a
+ * ciegas en su primer metro y las uniones daban saltos entre calles paralelas.
+ * Repitiendo varios puntos, el trozo siguiente arranca con contexto suficiente
+ * para engancharse a la misma vía que traía el anterior.
+ */
+function chunksWithOverlap(points, size = MAX_CHUNK_POINTS, overlap = CHUNK_OVERLAP) {
   if (points.length <= size) return [points];
+  const paso = Math.max(1, size - overlap);
   const chunks = [];
-  for (let i = 0; i < points.length; i += size - 1) {
+  for (let i = 0; i < points.length; i += paso) {
     const chunk = points.slice(i, i + size);
     if (chunk.length >= 2) chunks.push(chunk);
+    if (i + size >= points.length) break;
   }
   return chunks;
+}
+
+/**
+ * Colapsa las paradas a sus extremos.
+ *
+ * Con el vehículo detenido el GPS sigue reportando y la posición deriva unos
+ * metros en cualquier dirección. Esos puntos entran a OSRM como si fueran
+ * movimiento, y el motor —obligado a unirlos por la red vial— resuelve la
+ * deriva dando vueltas a la manzana. Es la causa habitual de que la línea se
+ * salga de la calle y dibuje lazos donde la unidad solo estuvo parada.
+ *
+ * Se conservan el primero y el último pulso de cada parada, que es lo que
+ * define dónde y cuánto se detuvo; los intermedios solo aportan ruido.
+ */
+export function collapseStops(points, { radiusMeters = STOP_CLUSTER_METERS, minPoints = 3 } = {}) {
+  if (points.length <= 2) return points;
+  const out = [];
+  let i = 0;
+  while (i < points.length) {
+    let fin = i;
+    while (fin + 1 < points.length && distanceMeters(points[i], points[fin + 1]) <= radiusMeters) fin++;
+
+    const largo = fin - i + 1;
+    if (largo >= minPoints) {
+      out.push(points[i], points[fin]);
+    } else {
+      for (let k = i; k <= fin; k++) out.push(points[k]);
+    }
+    i = fin + 1;
+  }
+  return out;
+}
+
+/**
+ * Radio de búsqueda por punto, en metros.
+ *
+ * Es la incertidumbre que se le declara a OSRM: cuanto mayor, más libertad
+ * tiene para engancharse a una calle vecina. Un valor fijo y generoso era parte
+ * del problema de que la línea se saliera de la vía, así que se ajusta a la
+ * calidad real del fix — con muchos satélites la posición es buena y conviene
+ * anclarla corto.
+ */
+function radiusFor(point) {
+  const satelites = Number(point?.satellites);
+  if (!Number.isFinite(satelites) || satelites <= 0) return 25;
+  if (satelites >= 10) return 10;
+  if (satelites >= 7) return 14;
+  if (satelites >= 5) return 20;
+  return 30;
+}
+
+/**
+ * Marcas de tiempo en segundos Unix, estrictamente crecientes.
+ *
+ * OSRM las usa en el modelo oculto de Markov para decidir qué transiciones
+ * entre calles candidatas son plausibles. Sin ellas asume un segundo entre
+ * puntos: con reportes cada 15 o 30 s, los tramos reales le parecen imposibles
+ * de recorrer y prefiere atajos por calles que la unidad nunca tomó. Es la
+ * mejora que más precisión aporta.
+ *
+ * Devuelve null si la traza no trae tiempos utilizables, para no mandar una
+ * secuencia inventada que empeoraría el ajuste.
+ */
+function timestampsFor(points) {
+  const segundos = [];
+  let anterior = null;
+  for (const point of points) {
+    const t = tiempoDe(point);
+    if (t === null || t === 0) return null;
+    let valor = Math.floor(t / 1000);
+    // OSRM exige una secuencia no decreciente; dos pulsos en el mismo segundo
+    // se separan artificialmente en lugar de descartar el punto.
+    if (anterior !== null && valor <= anterior) valor = anterior + 1;
+    segundos.push(valor);
+    anterior = valor;
+  }
+  return segundos;
 }
 
 function rawCoordinates(points) {
@@ -143,12 +240,18 @@ function rawCoordinates(points) {
 
 async function matchChunk(points, { baseUrl, timeoutMs, fetchImpl }) {
   const coordinates = points.map((p) => `${p.longitude.toFixed(6)},${p.latitude.toFixed(6)}`).join(';');
-  const radiuses = points.map(() => '25').join(';');
+  const radiuses = points.map(radiusFor).join(';');
+  // El rumbo solo se declara con el vehículo en marcha: parado, la veleta del
+  // GPS gira sola y fijarla clavaría la línea en la calle equivocada.
   const bearings = points.map((p) =>
-    Number(p.speed_kmh) >= 5 && Number.isFinite(Number(p.course)) ? `${Math.round(Number(p.course))},60` : '',
+    Number(p.speed_kmh) >= BEARING_MIN_KMH && Number.isFinite(Number(p.course))
+      ? `${Math.round(Number(p.course))},${BEARING_TOLERANCE}`
+      : '',
   ).join(';');
+  const timestamps = timestampsFor(points);
   const url = `${baseUrl.replace(/\/$/, '')}/match/v1/driving/${coordinates}` +
     `?geometries=geojson&overview=full&gaps=split&tidy=true&radiuses=${radiuses}` +
+    (timestamps ? `&timestamps=${timestamps.join(';')}` : '') +
     (bearings.replaceAll(';', '') ? `&bearings=${bearings}` : '');
   const response = await fetchImpl(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(timeoutMs) });
   const data = await response.json().catch(() => ({}));
@@ -217,7 +320,9 @@ export async function buildMatchedTrace(positions, {
       segments.push(rawCoordinates(group));
       continue;
     }
-    for (const chunk of chunksWithOverlap(group)) {
+    // Las paradas se colapsan solo para consultar: los pulsos completos se
+    // conservan para la lista, las métricas y el heredado del ajuste.
+    for (const chunk of chunksWithOverlap(collapseStops(group))) {
       try {
         const remainingMs = deadline - Date.now();
         if (remainingMs < 100) throw new Error('tiempo total de ajuste agotado');

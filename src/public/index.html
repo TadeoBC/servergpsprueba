@@ -45,6 +45,7 @@
 
     <span class="pastilla" id="estado-ws">conectando…</span>
     <button class="btn icono" id="activar-notificaciones" type="button" title="Alertas del navegador" aria-label="Activar alertas del navegador">△</button>
+    <button class="btn icono" id="abrir-equipos" type="button" title="Equipos de la flotilla" aria-label="Equipos de la flotilla" aria-controls="seccion-gestion" aria-expanded="false">⊞</button>
     <button class="btn icono peligro" id="salir" type="button" title="Cerrar sesión" aria-label="Cerrar sesión">⏻</button>
   </header>
 
@@ -231,6 +232,22 @@
         </section>
 
         <!-- ALERTAS -->
+        <!-- ── gestión de equipos ─────────────────────────────────────────
+             Alta, renombrado y selección de unidades. Vive en el lateral, con
+             el mismo comportamiento que el resto de vistas del panel. -->
+        <section class="seccion" id="seccion-gestion">
+          <h2>FLOTILLA :: EQUIPOS</h2>
+          <div class="controles">
+            <form id="form-alta-equipo" class="fila-alta">
+              <input id="alta-imei" type="text" inputmode="numeric" maxlength="15" placeholder="IMEI (15 dígitos)" aria-label="IMEI del equipo nuevo" />
+              <input id="alta-alias" type="text" maxlength="100" placeholder="Nombre (opcional)" aria-label="Nombre del equipo nuevo" />
+              <button class="btn primario pequeno" type="submit">AGREGAR</button>
+            </form>
+            <div id="aviso-equipos" class="vacio" style="padding:0"></div>
+          </div>
+          <div id="lista-equipos"></div>
+        </section>
+
         <section class="seccion" id="seccion-alertas">
           <h2>ALERTAS_ACTIVAS</h2>
           <div class="alertas-cab">
@@ -274,6 +291,9 @@
         <button class="btn pequeno" id="seguir-gps" type="button" aria-pressed="false">◎ Seguir</button>
         <button class="btn pequeno" id="vista-3d" type="button" aria-pressed="false">◎ Globo 3D</button>
         <button class="btn pequeno" id="vista-mosaico" type="button" aria-pressed="false">▦ Mosaico</button>
+      </div>
+
+
       </div>
       <div class="marco-hud" aria-hidden="true"></div>
       <div id="mapa" class="superficie-mapa"></div>

@@ -562,3 +562,16 @@ export async function dailyRouteIsClosed(deviceId, fecha) {
   );
   return rows[0]?.cerrada === true;
 }
+
+/**
+ * Cambia el nombre visible y la placa de un equipo. Es lo único editable de su
+ * identidad: el IMEI lo fija el hardware y renombrarlo rompería el historial.
+ */
+export async function updateDeviceIdentity(deviceId, { alias, placa }) {
+  const { rows } = await query(
+    `UPDATE devices SET alias = $2, placa = $3 WHERE id = $1 RETURNING *`,
+    [deviceId, alias, placa],
+  );
+  clearDeviceCache();
+  return rows[0] ?? null;
+}

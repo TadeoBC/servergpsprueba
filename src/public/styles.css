@@ -49,6 +49,7 @@ body[data-vista="telemetria"] { --panel-ancho: 700px; }
 body[data-vista="recorrido"]  { --panel-ancho: 470px; }
 body[data-vista="alertas"]    { --panel-ancho: 760px; }
 body[data-vista="diagnostico"]{ --panel-ancho: 640px; }
+body[data-vista="gestion"]    { --panel-ancho: 560px; }
 
 * { box-sizing: border-box; }
 
@@ -374,6 +375,8 @@ body[data-vista="mapa"] #panel-estado-global,
 body[data-vista="mapa"] #seccion-equipos,
 body[data-vista="telemetria"] #seccion-detalle:not([hidden]),
 body[data-vista="recorrido"] #seccion-recorrido,
+body[data-vista="recorrido"] #seccion-recorrido-rango,
+body[data-vista="gestion"] #seccion-gestion,
 body[data-vista="alertas"] #seccion-alertas,
 body[data-vista="diagnostico"] #seccion-diagnostico { display: block; }
 
@@ -381,7 +384,8 @@ body[data-vista="diagnostico"] #seccion-diagnostico { display: block; }
 .aviso-seleccion[hidden] { display: none; }
 body[data-vista="mapa"] #aviso-seleccion,
 body[data-vista="alertas"] #aviso-seleccion,
-body[data-vista="diagnostico"] #aviso-seleccion { display: none; }
+body[data-vista="diagnostico"] #aviso-seleccion,
+body[data-vista="gestion"] #aviso-seleccion { display: none; }
 
 /* ── panel HUD genérico (esquinas de mira) ─────────────────────────────────── */
 .panel-hud,
@@ -1285,3 +1289,94 @@ body[data-vista="diagnostico"] #seccion-diagnostico > *:nth-child(n+4) { animati
 #tel-tarjeta-bateria.sin-dato { border-style: dashed; opacity: .76; }
 #tel-tarjeta-bateria.sin-dato .tel-cifra > span { color: var(--texto-3); text-shadow: none; }
 .dato-pendiente { color: var(--texto-3); font-style: italic; }
+
+/* ── gestión de equipos ────────────────────────────────────────────────────
+   La lista vive dentro del panel lateral, así que solo necesita ordenar sus
+   filas; el ancho y el desplazamiento los pone la sección que la contiene. */
+
+
+.fila-alta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.fila-alta input {
+  flex: 1 1 130px;
+  min-width: 0;
+}
+
+#lista-equipos {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.equipo-fila {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--borde-suave);
+}
+
+.equipo-fila.seleccionado {
+  border-color: var(--acento);
+  background: var(--acento-tenue);
+}
+
+/* El color es el mismo que identifica a la unidad en el mapa, para poder
+   emparejar de un vistazo la fila con su estela. */
+.equipo-color {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  box-shadow: 0 0 8px currentColor;
+  background: currentColor;
+}
+
+.equipo-datos {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.equipo-nombre {
+  font-family: var(--display);
+  color: var(--texto);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.equipo-meta {
+  font-size: .74rem;
+  color: var(--texto-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.equipo-acciones {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 4px;
+}
+
+.equipo-edicion {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.equipo-edicion input {
+  flex: 1 1 120px;
+  min-width: 0;
+}
+
+@media (max-width: 620px) {
+  .equipo-fila { flex-wrap: wrap; }
+  .equipo-acciones { width: 100%; justify-content: flex-end; }
+}

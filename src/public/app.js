@@ -18,6 +18,7 @@ const estado = {
   modoVista: cargarModoMapa(), // 2d | 3d | mosaico
   siguiendo: false,
   vigilados: cargarVigilados(),
+  equipoEditando: null, // IMEI de la fila abierta en el panel de equipos
   mapasMosaico: new Map(), // imei -> { map, marker, tile }
   temasMosaico: cargarTemasMosaico(),
   mapa3d: null,
@@ -242,7 +243,7 @@ function configurarInterfazMovil() {
 }
 
 function cambiarVista(vista) {
-  const validas = new Set(['mapa', 'telemetria', 'recorrido', 'alertas', 'diagnostico']);
+  const validas = new Set(['mapa', 'telemetria', 'recorrido', 'alertas', 'diagnostico', 'gestion']);
   if (!validas.has(vista)) vista = 'mapa';
   estado.vista = vista;
   document.body.dataset.vista = vista;
@@ -265,6 +266,7 @@ function cambiarVista(vista) {
   if (vista === 'alertas') programarRender('alertas');
   if (vista === 'diagnostico') programarRender('depuracion');
   if (vista === 'recorrido') programarRender('perfil', 'recorrido');
+  if (vista === 'gestion') renderEquipos();
   programarResizeMapas();
 }
 
@@ -881,21 +883,297 @@ function actualizarMarcador(device) {
   actualizarGpsMosaico(device);
 }
 
-function actualizarEstelaViva(device) {
+// Cortes de la estela viva. Mismos criterios que usa el servidor para el
+// recorrido: un tramo que el equipo no reportó no se dibuja como si lo hubiera
+// recorrido. Ver splitTrace en src/tracking/map-match.js.
+const ESTELA_HUECO_SEGUNDOS = 600;
+const ESTELA_SALTO_MINIMO_M = 300;
+const ESTELA_SALTO_GRANDE_M = 1000;
+const ESTELA_KMH_IMPOSIBLE = 120;
+const ESTELA_MAX_PUNTOS = 240;
+
+/**
+ * Registra la última posición del equipo en su estela viva.
+ *
+ * Se guarda el punto crudo Y el ajustado a calle por separado, indexados por id
+ * de posición. Antes se guardaba solo el resultado ya resuelto, y como las
+ * posiciones que llegan por WebSocket todavía no traen el ajuste, la estela
+ * mezclaba puntos crudos con puntos pegados al eje de la calle: al llegar el
+ * ajuste después, el mismo punto entraba dos veces en sitios distintos y la
+ * línea dibujaba un ida y vuelta sobre la misma calle. Guardando por id, el
+ * punto se actualiza en lugar de duplicarse.
+ */
+function registrarEstelaViva(device) {
   const p = device.last_position;
   if (!p || p.latitude === null || p.longitude === null) return;
-  const point = coordenadaVisual(p).map(Number);
-  const points = estado.estelasVivas.get(device.imei) || [];
-  const last = points.at(-1);
-  if (!last || last[0] !== point[0] || last[1] !== point[1]) points.push(point);
-  if (points.length > 240) points.splice(0, points.length - 240);
-  estado.estelasVivas.set(device.imei, points);
-  let layer = estado.capasEstelasVivas.get(device.imei);
-  if (!layer) {
-    layer = L.polyline(points, { color: colorUnidad(device.imei), weight: 3, opacity: .78, dashArray: '8 7' }).addTo(mapa);
-    estado.capasEstelasVivas.set(device.imei, layer);
-  } else layer.setLatLngs(points);
+
+  const puntos = estado.estelasVivas.get(device.imei) || [];
+  const entrada = {
+    id: p.id ?? null,
+    latitude: Number(p.latitude),
+    longitude: Number(p.longitude),
+    display_latitude: p.display_latitude != null ? Number(p.display_latitude) : null,
+    display_longitude: p.display_longitude != null ? Number(p.display_longitude) : null,
+    t: new Date(p.device_time ?? p.server_time ?? Date.now()).getTime(),
+  };
+
+  const ultimo = puntos.at(-1);
+  const mismoPunto = ultimo && (
+    (entrada.id !== null && ultimo.id === entrada.id) ||
+    (ultimo.latitude === entrada.latitude && ultimo.longitude === entrada.longitude)
+  );
+  if (mismoPunto) puntos[puntos.length - 1] = entrada;
+  else puntos.push(entrada);
+
+  if (puntos.length > ESTELA_MAX_PUNTOS) puntos.splice(0, puntos.length - ESTELA_MAX_PUNTOS);
+  estado.estelasVivas.set(device.imei, puntos);
+}
+
+/** Tramos dibujables de la estela viva, ya cortados donde faltan datos. */
+function geometriaEstelaViva(imei) {
+  const puntos = estado.estelasVivas.get(imei) ?? [];
+  const segmentos = [];
+  let actual = [];
+  for (const punto of puntos) {
+    const anterior = actual.at(-1);
+    if (anterior) {
+      const metros = distanciaKm(anterior, punto) * 1000;
+      const segundos = Number.isFinite(punto.t) && Number.isFinite(anterior.t)
+        ? (punto.t - anterior.t) / 1000 : null;
+      const kmh = segundos && segundos > 0 ? (metros / segundos) * 3.6 : null;
+      const hueco = segundos !== null && segundos > ESTELA_HUECO_SEGUNDOS && metros > ESTELA_SALTO_MINIMO_M;
+      const imposible = metros > ESTELA_SALTO_GRANDE_M && kmh !== null && kmh > ESTELA_KMH_IMPOSIBLE;
+      if (hueco || imposible) {
+        segmentos.push(actual);
+        actual = [];
+      }
+    }
+    actual.push(punto);
+  }
+  if (actual.length) segmentos.push(actual);
+
+  return segmentos
+    .map((segmento) => segmento.map((punto) => coordenadaVisual(punto).map(Number)))
+    .filter((segmento) => segmento.length >= 2);
+}
+
+/**
+ * ¿Se dibuja la estela de este equipo?
+ * Al seguir una unidad el mapa se reserva para ella: las demás estelas se
+ * siguen calculando en segundo plano, pero se ocultan para no ensuciar la vista.
+ */
+function estelaVisible(imei) {
+  if (!estado.siguiendo || !estado.seleccionado) return true;
+  return imei === estado.seleccionado;
+}
+
+function actualizarEstelaViva(device) {
+  registrarEstelaViva(device);
+  redibujarEstelaViva(device.imei);
   if (estado.modoVista === '3d') programarRender('estela');
+}
+
+function redibujarEstelaViva(imei) {
+  const segmentos = geometriaEstelaViva(imei);
+  let layer = estado.capasEstelasVivas.get(imei);
+
+  if (!estelaVisible(imei) || !segmentos.length) {
+    if (layer) {
+      mapa.removeLayer(layer);
+      estado.capasEstelasVivas.delete(imei);
+    }
+    return;
+  }
+
+  if (!layer) {
+    layer = L.polyline(segmentos, { color: colorUnidad(imei), weight: 3, opacity: .78, dashArray: '8 7' }).addTo(mapa);
+    estado.capasEstelasVivas.set(imei, layer);
+  } else {
+    layer.setLatLngs(segmentos);
+    if (!mapa.hasLayer(layer)) layer.addTo(mapa);
+  }
+}
+
+/** Reevalúa qué estelas se ven; se llama al activar o soltar el seguimiento. */
+function refrescarVisibilidadEstelas() {
+  for (const imei of estado.estelasVivas.keys()) redibujarEstelaViva(imei);
+  if (estado.modoVista === '3d') programarRender('estela');
+}
+
+// ── panel de equipos ────────────────────────────────────────────────────────
+// Alta, renombrado, selección y alta/baja del mosaico sin salir del mapa. La
+// lista sale de estado.equipos, así que refleja lo mismo que la barra lateral.
+
+function panelEquiposAbierto() {
+  return estado.vista === 'gestion';
+}
+
+/** Abre o cierra la vista de equipos; cerrarla devuelve al mapa. */
+function alternarPanelEquipos(forzar) {
+  const abrir = forzar ?? !panelEquiposAbierto();
+  if (abrir) estado.equipoEditando = null;
+  cambiarVista(abrir ? 'gestion' : 'mapa');
+  document.getElementById('abrir-equipos').setAttribute('aria-expanded', String(abrir));
+  if (abrir) document.getElementById('alta-imei')?.focus({ preventScroll: true });
+}
+
+function avisoEquipos(texto, esError = false) {
+  const caja = document.getElementById('aviso-equipos');
+  caja.textContent = texto ?? '';
+  caja.style.color = esError ? 'var(--rojo)' : 'var(--texto-2)';
+}
+
+function renderEquipos() {
+  if (!panelEquiposAbierto()) return;
+  const contenedor = document.getElementById('lista-equipos');
+  const equipos = [...estado.equipos.values()].sort((a, b) => nombre(a).localeCompare(nombre(b)));
+
+  if (!equipos.length) {
+    contenedor.innerHTML = '<div class="vacio">No hay equipos dados de alta.</div>';
+    return;
+  }
+
+  contenedor.innerHTML = equipos.map((d) => {
+    const color = colorUnidad(d.imei);
+    const vigilado = estado.vigilados.has(d.imei);
+    const seleccionado = estado.seleccionado === d.imei;
+
+    // La fila en edición se sustituye por sus campos; el resto sigue igual.
+    if (estado.equipoEditando === d.imei) {
+      return '<div class="equipo-fila seleccionado" data-fila="' + esc(d.imei) + '">' +
+        '<div class="equipo-edicion">' +
+          '<input type="text" maxlength="100" data-editar-alias value="' + esc(d.alias ?? '') + '" placeholder="Nombre" aria-label="Nombre" />' +
+          '<input type="text" maxlength="30" data-editar-placa value="' + esc(d.placa ?? '') + '" placeholder="Placa" aria-label="Placa" />' +
+          '<button class="btn primario pequeno" type="button" data-guardar="' + esc(d.imei) + '">GUARDAR</button>' +
+          '<button class="btn pequeno" type="button" data-cancelar-edicion>CANCELAR</button>' +
+        '</div></div>';
+    }
+
+    return '<div class="equipo-fila' + (seleccionado ? ' seleccionado' : '') + '" data-fila="' + esc(d.imei) + '">' +
+      '<span class="equipo-color" style="color:' + color + '"></span>' +
+      '<div class="equipo-datos">' +
+        '<div class="equipo-nombre">' + esc(nombre(d)) + '</div>' +
+        '<div class="equipo-meta">' + esc(d.imei) + (d.placa ? ' · ' + esc(d.placa) : '') +
+          ' · ' + esc(desdeHace(d.last_seen_at)) + '</div>' +
+      '</div>' +
+      '<div class="equipo-acciones">' +
+        '<button class="btn pequeno" type="button" data-ver="' + esc(d.imei) + '" title="Ver en el mapa">VER</button>' +
+        '<button class="btn pequeno" type="button" data-editar="' + esc(d.imei) + '" title="Cambiar nombre o placa">&#9998;</button>' +
+        '<button class="btn pequeno' + (vigilado ? ' activo' : '') + '" type="button" data-vigilar="' + esc(d.imei) + '" ' +
+          'title="' + (vigilado ? 'Quitar del mosaico' : 'Agregar al mosaico') + '">' + (vigilado ? '◉' : '◎') + '</button>' +
+        '<button class="btn pequeno" type="button" data-quitar="' + esc(d.imei) + '" title="Quitar de la flotilla (conserva su historial)">✕</button>' +
+      '</div></div>';
+  }).join('');
+}
+
+async function guardarEquipo(imei, fila) {
+  const alias = fila.querySelector('[data-editar-alias]')?.value.trim() ?? '';
+  const placa = fila.querySelector('[data-editar-placa]')?.value.trim() ?? '';
+  try {
+    const data = await api('/api/devices/' + encodeURIComponent(imei), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ alias: alias || null, placa: placa || null }),
+    });
+    // Se refresca la copia en memoria para que el mapa, el HUD y la barra
+    // lateral muestren el nombre nuevo sin esperar al siguiente sondeo.
+    const actual = estado.equipos.get(imei);
+    if (actual) estado.equipos.set(imei, { ...actual, alias: data.device.alias, placa: data.device.placa });
+    estado.equipoEditando = null;
+    avisoEquipos('Datos actualizados.');
+    renderEquipos();
+    programarRender('lista', 'global');
+    if (estado.seleccionado === imei) renderDetalle();
+    actualizarEtiquetasUnidad(imei);
+  } catch (err) {
+    avisoEquipos(err.message || 'No se pudo guardar.', true);
+  }
+}
+
+/** El nombre vive también en el marcador y el tooltip del mapa. */
+function actualizarEtiquetasUnidad(imei) {
+  const device = estado.equipos.get(imei);
+  if (!device) return;
+  actualizarMarcador(device);
+  if (estado.seleccionado === imei) {
+    document.getElementById('titulo-unidad').textContent = nombre(device);
+  }
+}
+
+async function altaEquipo(event) {
+  event.preventDefault();
+  const imei = document.getElementById('alta-imei').value.trim();
+  const alias = document.getElementById('alta-alias').value.trim();
+  if (!/^\d{15}$/.test(imei)) {
+    avisoEquipos('El IMEI debe tener exactamente 15 dígitos.', true);
+    return;
+  }
+  try {
+    const data = await api('/api/devices', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ imei, alias: alias || null, placa: null }),
+    });
+    document.getElementById('alta-imei').value = '';
+    document.getElementById('alta-alias').value = '';
+    avisoEquipos(data.message ?? 'Equipo agregado.');
+    await cargarEquipos();
+    renderEquipos();
+  } catch (err) {
+    avisoEquipos(err.message || 'No se pudo agregar el equipo.', true);
+  }
+}
+
+function conectarPanelEquipos() {
+  document.getElementById('abrir-equipos').addEventListener('click', () => alternarPanelEquipos());
+  document.getElementById('form-alta-equipo').addEventListener('submit', altaEquipo);
+
+  document.getElementById('lista-equipos').addEventListener('click', (event) => {
+    const ver = event.target.closest('[data-ver]');
+    if (ver) {
+      seleccionar(ver.dataset.ver, true);
+      alternarPanelEquipos(false);
+      return;
+    }
+    const editar = event.target.closest('[data-editar]');
+    if (editar) {
+      estado.equipoEditando = editar.dataset.editar;
+      renderEquipos();
+      document.querySelector('[data-editar-alias]')?.focus({ preventScroll: true });
+      return;
+    }
+    const guardar = event.target.closest('[data-guardar]');
+    if (guardar) {
+      guardarEquipo(guardar.dataset.guardar, guardar.closest('.equipo-fila'));
+      return;
+    }
+    if (event.target.closest('[data-cancelar-edicion]')) {
+      estado.equipoEditando = null;
+      renderEquipos();
+      return;
+    }
+    const vigilar = event.target.closest('[data-vigilar]');
+    if (vigilar) {
+      alternarVigilado(vigilar.dataset.vigilar);
+      renderEquipos();
+      return;
+    }
+    const quitar = event.target.closest('[data-quitar]');
+    if (quitar) quitarEquipo(quitar.dataset.quitar);
+  });
+
+  // Enter dentro de la edición guarda sin tener que apuntar al botón.
+  document.getElementById('lista-equipos').addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || !estado.equipoEditando) return;
+    const fila = event.target.closest('.equipo-fila');
+    if (!fila) return;
+    event.preventDefault();
+    guardarEquipo(estado.equipoEditando, fila);
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && panelEquiposAbierto()) alternarPanelEquipos(false);
+  });
 }
 
 function encuadrarTodo() {
@@ -934,6 +1212,7 @@ function alternarSeguimiento() {
   button.setAttribute('aria-pressed', String(estado.siguiendo));
   button.textContent = estado.siguiendo ? '◉ Siguiendo' : '◎ Seguir';
   if (estado.siguiendo) centrarSeleccionado();
+  refrescarVisibilidadEstelas();
 }
 
 function centrarSeleccionado() {
@@ -1082,10 +1361,12 @@ function sincronizarEstela3d() {
     .map((segment) => segment.map(([lat, lon]) => [lon, lat]));
   const features = [];
   if (coordinates.length) features.push({ type: 'Feature', properties: { color: colorUnidad(estado.seleccionado) }, geometry: { type: 'MultiLineString', coordinates } });
-  for (const [imei, points] of estado.estelasVivas) {
-    if (points.length < 2) continue;
+  for (const imei of estado.estelasVivas.keys()) {
+    if (!estelaVisible(imei)) continue;
+    const segmentos = geometriaEstelaViva(imei);
+    if (!segmentos.length) continue;
     features.push({ type: 'Feature', properties: { color: colorUnidad(imei) },
-      geometry: { type: 'LineString', coordinates: points.map(([lat, lon]) => [lon, lat]) } });
+      geometry: { type: 'MultiLineString', coordinates: segmentos.map((s) => s.map(([lat, lon]) => [lon, lat])) } });
   }
   const geojson = { type: 'FeatureCollection', features };
   if (map3d.getSource('estela')) map3d.getSource('estela').setData(geojson);
@@ -1281,6 +1562,9 @@ async function seleccionar(imei, centrar) {
 
   // Días con recorrido guardado de este equipo, para el selector de jornada.
   cargarDiasDisponibles();
+
+  // Cambiar de unidad cambia cuál estela es la protagonista.
+  refrescarVisibilidadEstelas();
 
   // Traemos los paquetes de depuración de este equipo (los que ya estaban en
   // memoria del servidor antes de que abriéramos la interfaz).
@@ -1871,6 +2155,7 @@ async function iniciar() {
   document.getElementById('tema-mapa').value = estado.temaMapa;
   document.getElementById('tema-mapa').addEventListener('change', (e) => cambiarTemaMapa(e.currentTarget.value));
   document.getElementById('seguir-gps').addEventListener('click', alternarSeguimiento);
+  conectarPanelEquipos();
   document.getElementById('vista-3d').addEventListener('click', () => cambiarModoVista(estado.modoVista === '3d' ? '2d' : '3d'));
   document.getElementById('vista-mosaico').addEventListener('click', () => cambiarModoVista(estado.modoVista === 'mosaico' ? cargarModoMapa() : 'mosaico'));
   document.getElementById('ajustar-calles').addEventListener('change', () => {
@@ -2015,8 +2300,8 @@ async function agregarEquipo(e) {
   }
 }
 
-async function quitarEquipo() {
-  const imei = estado.seleccionado;
+async function quitarEquipo(imeiObjetivo) {
+  const imei = imeiObjetivo ?? estado.seleccionado;
   const d = estado.equipos.get(imei);
   if (!d) return;
   const confirmado = window.confirm(
@@ -2030,20 +2315,34 @@ async function quitarEquipo() {
     if (marker) mapa.removeLayer(marker);
     estado.marcadores.delete(imei);
     estado.equipos.delete(imei);
-    estado.seleccionado = null;
+    const capaEstela = estado.capasEstelasVivas.get(imei);
+    if (capaEstela) mapa.removeLayer(capaEstela);
+    estado.capasEstelasVivas.delete(imei);
+    estado.estelasVivas.delete(imei);
+    if (estado.vigilados.delete(imei)) {
+      localStorage.setItem('atlyx_gps_vigilados', JSON.stringify([...estado.vigilados]));
+    }
+    // Quitar una unidad desde el panel no debe tirar el recorrido que se está
+    // viendo de otra: solo se vacía la vista si era la seleccionada.
+    const eraSeleccionada = estado.seleccionado === imei;
+    if (eraSeleccionada) estado.seleccionado = null;
+    if (panelEquiposAbierto()) renderEquipos();
     enviarSuscripcionWs();
     const marker3d = estado.marcadores3d.get(imei);
     marker3d?.marker.remove();
     marker3d?.popup.remove();
     estado.marcadores3d.delete(imei);
-    limpiarRecorrido();
+    if (eraSeleccionada) {
+      limpiarRecorrido();
+      document.getElementById('titulo-unidad').textContent = 'FLOTILLA';
+    }
     programarRender('lista', 'global', 'detalle', 'telemetria', 'objetivo', 'depuracion');
-    document.getElementById('titulo-unidad').textContent = 'FLOTILLA';
     cambiarVista(estado.vista);
     if (estado.modoVista === 'mosaico') renderMosaico();
     document.getElementById('info-equipo').textContent = data.message;
   } catch (err) {
-    info.textContent = 'Error: ' + err.message;
+    if (info) info.textContent = 'Error: ' + err.message;
+    avisoEquipos(err.message || 'No se pudo quitar el equipo.', true);
   }
 }
 

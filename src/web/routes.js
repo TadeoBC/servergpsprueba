@@ -9,6 +9,7 @@ import {
   listPositions,
   listEvents,
   updateDeviceSettings,
+  updateDeviceIdentity,
   listDeviceCommands,
   createOrRestoreDevice,
   archiveDevice,
@@ -236,6 +237,27 @@ export function buildApiRouter() {
       if (req.query.desde && !desde) return res.status(400).json({ error: 'parámetro "desde" inválido (usa ISO 8601)' });
       res.json({ events: await listEvents(device.id, { desde, limit: clampLimit(req.query.limit) }) });
     } catch (err) { next(err); }
+  });
+
+  // Renombrar un equipo. El IMEI no se toca: lo fija el hardware y cambiarlo
+  // dejaría huérfanos su historial de posiciones y eventos.
+  router.patch('/devices/:imei', requireAuthApi, async (req, res, next) => {
+    try {
+      const device = await getDeviceByImei(req.params.imei);
+      if (!device || device.archived_at) return res.status(404).json({ error: 'equipo no encontrado' });
+
+      const alias = optionalText(req.body?.alias, 100);
+      const placa = optionalText(req.body?.placa, 30);
+      if (alias === undefined || placa === undefined) {
+        return res.status(400).json({ error: 'alias (máx. 100) o placa (máx. 30) inválidos' });
+      }
+
+      const updated = await updateDeviceIdentity(device.id, { alias, placa });
+      logger.info({ imei: device.imei, usuario: req.usuario }, 'equipo renombrado desde la interfaz');
+      res.json({ device: updated, message: 'Datos del equipo actualizados.' });
+    } catch (err) {
+      next(err);
+    }
   });
 
   router.patch('/devices/:imei/settings', requireAuthApi, async (req, res, next) => {
